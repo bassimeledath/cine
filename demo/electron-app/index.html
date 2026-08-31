@@ -1,0 +1,107 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Meridian — Desktop</title>
+<style>
+  * { margin:0; box-sizing:border-box; font-family:-apple-system,'Segoe UI',sans-serif; }
+  body { height:100vh; display:flex; background:#0b1220; color:#e6edf6; overflow:hidden; }
+
+  aside { width:216px; background:#0e1626; border-right:1px solid #1c2740; display:flex; flex-direction:column; padding-top:34px; }
+  .brand { font-size:14px; font-weight:700; padding:10px 18px 16px; color:#fff; letter-spacing:.02em; }
+  .nav { padding:0 10px; }
+  .item { display:flex; align-items:center; gap:10px; padding:9px 12px; border-radius:8px; font-size:13px; color:#93a4bf; cursor:pointer; margin-bottom:2px; }
+  .item:hover { background:#16223a; color:#cfe0f7; }
+  .item.active { background:#1d64f2; color:#fff; }
+  .dot { width:7px; height:7px; border-radius:50%; background:currentColor; opacity:.7; }
+
+  main { flex:1; display:flex; flex-direction:column; }
+  header { height:56px; border-bottom:1px solid #1c2740; display:flex; align-items:center; padding:0 24px; gap:12px; -webkit-app-region:drag; }
+  h1 { font-size:15px; font-weight:600; }
+  .spacer { flex:1 }
+  button { border:0; border-radius:9px; padding:9px 16px; font-size:13px; font-weight:600; cursor:pointer; -webkit-app-region:no-drag; transition:filter .15s ease; }
+  button:hover { filter:brightness(1.12); }
+  .primary { background:#1d64f2; color:#fff; }
+  .ghost { background:#1a2540; color:#b6c6e0; }
+
+  section { flex:1; padding:24px; overflow:auto; }
+  .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin-bottom:18px; }
+  .card { background:#111c30; border:1px solid #1c2740; border-radius:12px; padding:16px; }
+  .label { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#7b8ca8; }
+  .val { font-size:24px; font-weight:700; margin-top:6px; }
+  .ok { color:#3ddc97 } .warn { color:#ffb020 }
+
+  .panel { background:#111c30; border:1px solid #1c2740; border-radius:12px; padding:18px; }
+  .row { display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid #17223a; font-size:13px; }
+  .row:last-child { border-bottom:0 }
+  .pill { font-size:11px; font-weight:600; padding:3px 9px; border-radius:999px; }
+  .green { background:#123626; color:#3ddc97 } .amber { background:#3a2c10; color:#ffb020 }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:#8fa3c2 }
+  #toast { position:fixed; bottom:22px; right:22px; background:#1d64f2; color:#fff; padding:11px 16px; border-radius:10px; font-size:13px; font-weight:600; opacity:0; transform:translateY(8px); transition:all .22s ease; }
+  #toast.show { opacity:1; transform:translateY(0) }
+</style>
+</head>
+<body>
+<aside>
+  <div class="brand">◆ Meridian</div>
+  <div class="nav" id="nav">
+    <div class="item active" data-view="Pipelines"><span class="dot"></span>Pipelines</div>
+    <div class="item" data-view="Services"><span class="dot"></span>Services</div>
+    <div class="item" data-view="Incidents"><span class="dot"></span>Incidents</div>
+  </div>
+</aside>
+<main>
+  <header>
+    <h1 id="title">Pipelines</h1>
+    <div class="spacer"></div>
+    <button class="ghost" id="sync">Sync</button>
+    <button class="primary" id="deploy">Deploy</button>
+  </header>
+  <section>
+    <div class="grid">
+      <div class="card"><div class="label">Build time</div><div class="val" id="m1">3m 12s</div></div>
+      <div class="card"><div class="label">Success rate</div><div class="val ok" id="m2">98.4%</div></div>
+      <div class="card"><div class="label">Queue depth</div><div class="val warn" id="m3">7</div></div>
+    </div>
+    <div class="panel" id="list">
+      <div class="row"><span class="pill green">passed</span><span>api-gateway</span><span class="spacer"></span><span class="mono">#4182</span></div>
+      <div class="row"><span class="pill green">passed</span><span>web-client</span><span class="spacer"></span><span class="mono">#4181</span></div>
+      <div class="row"><span class="pill amber">running</span><span>worker-pool</span><span class="spacer"></span><span class="mono">#4180</span></div>
+    </div>
+  </section>
+</main>
+<div id="toast"></div>
+<script>
+  const toast = document.getElementById('toast')
+  let tid = null
+  function showToast(msg) {
+    toast.textContent = msg
+    toast.classList.add('show')
+    clearTimeout(tid)
+    tid = setTimeout(() => toast.classList.remove('show'), 1800)
+  }
+  let build = 4182
+  document.getElementById('deploy').onclick = () => {
+    build++
+    const r = document.createElement('div')
+    r.className = 'row'
+    r.innerHTML = '<span class="pill amber">running</span><span>api-gateway</span><span class="spacer"></span><span class="mono">#' + build + '</span>'
+    document.getElementById('list').prepend(r)
+    document.getElementById('m3').textContent = String(Number(document.getElementById('m3').textContent) + 1)
+    showToast('Deploy queued — build #' + build)
+  }
+  document.getElementById('sync').onclick = () => {
+    document.getElementById('m1').textContent = '2m 47s'
+    document.getElementById('m2').textContent = '99.1%'
+    showToast('Synced with origin')
+  }
+  document.getElementById('nav').addEventListener('click', (e) => {
+    const it = e.target.closest('.item')
+    if (!it) return
+    document.querySelectorAll('.item').forEach(n => n.classList.remove('active'))
+    it.classList.add('active')
+    document.getElementById('title').textContent = it.dataset.view
+  })
+</script>
+</body>
+</html>

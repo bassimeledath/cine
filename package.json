@@ -1,0 +1,20 @@
+{
+  "name": "cine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Headless cinematic screen recorder — autonomous capture, auto-zoom, and rendering for agent-driven demos",
+  "type": "module",
+  "bin": {
+    "cine": "./bin/cine.mjs"
+  },
+  "scripts": {
+    "build:native": "cc -O2 -framework ApplicationServices -o native/cursor-logger native/cursor-logger.c",
+    "demo": "node bin/cine.mjs demo"
+  },
+  "dependencies": {
+    "puppeteer-core": "^24.0.0"
+  },
+  "devDependencies": {
+    "electron": "^35.7.5"
+  }
+}

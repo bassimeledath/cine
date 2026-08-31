@@ -1,0 +1,559 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html,body{margin:0;padding:0;background:#000;width:1920px;height:1080px;overflow:hidden}
+  #stage{position:relative;width:1920px;height:1080px}
+  #c{position:absolute;inset:0;display:block}
+
+  /* Overlays are real DOM composited by the page screenshot, not canvas draw
+     calls. That's the whole trick: web fonts, flexbox, blur, shadows and SVG
+     all come for free, and a layer is a style update rather than a paint
+     routine. */
+  #overlays{position:absolute;inset:0;pointer-events:none;
+    font-family:-apple-system,'SF Pro Display','Segoe UI',sans-serif;
+    -webkit-font-smoothing:antialiased}
+  #leaders{position:absolute;inset:0;width:1920px;height:1080px}
+  .ov{position:absolute;opacity:0;will-change:transform,opacity}
+
+  /* --- full-frame title / outro --- */
+  .ov-title{inset:0;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:18px;color:#fff;
+    background:linear-gradient(135deg,#0e1720 0%,#234156 100%)}
+  .ov-title .kicker{font-size:19px;font-weight:600;letter-spacing:.22em;
+    text-transform:uppercase;color:#6ea8d8}
+  .ov-title .head{font-size:82px;font-weight:700;letter-spacing:-.025em}
+  .ov-title .sub{font-size:26px;font-weight:400;color:#9fb6cc}
+  .ov-title .rule{width:96px;height:3px;border-radius:2px;background:#3d8fd0}
+
+  /* --- lower-third chapter marker --- */
+  .ov-lower{left:64px;bottom:56px;display:flex;align-items:center;gap:14px;
+    padding:13px 22px 13px 14px;border-radius:14px;color:#fff;
+    background:rgba(10,18,30,.72);backdrop-filter:blur(18px);
+    border:1px solid rgba(255,255,255,.12);
+    box-shadow:0 18px 44px rgba(0,0,0,.42)}
+  .ov-lower .num{width:32px;height:32px;border-radius:9px;background:#1d64f2;
+    display:flex;align-items:center;justify-content:center;
+    font-size:15px;font-weight:700}
+  .ov-lower .txt{font-size:22px;font-weight:600;letter-spacing:-.01em}
+
+  /* --- anchored toast --- */
+  .ov-toast{display:flex;align-items:flex-start;gap:13px;max-width:430px;
+    padding:15px 19px;border-radius:15px;color:#eaf2ff;
+    background:rgba(14,24,40,.82);backdrop-filter:blur(20px) saturate(1.3);
+    border:1px solid rgba(255,255,255,.14);
+    box-shadow:0 22px 54px rgba(0,0,0,.5)}
+  .ov-toast .icon{width:30px;height:30px;border-radius:50%;flex:none;
+    display:flex;align-items:center;justify-content:center;
+    font-size:16px;font-weight:700;background:#1d64f2;color:#fff}
+  .ov-toast.good .icon{background:#22c07d}
+  .ov-toast.warn .icon{background:#ffb020;color:#241a00}
+  .ov-toast .t{font-size:20px;font-weight:650;letter-spacing:-.01em}
+  .ov-toast .b{font-size:16px;color:#9fb6cf;margin-top:3px;line-height:1.35}
+
+  /* --- anchored callout (label + leader line to a UI element) --- */
+  .ov-callout{padding:10px 16px;border-radius:11px;font-size:19px;
+    font-weight:600;color:#0b1220;background:#ffd666;
+    box-shadow:0 14px 34px rgba(0,0,0,.4);white-space:nowrap}
+  .ov-callout .sub{display:block;font-size:14px;font-weight:500;
+    color:#6b5a1f;margin-top:1px}
+  /* Sized in JS to the captured element rect — it circles the thing it's
+     pointing at rather than sitting on top of it. */
+  .ov-ring{border-radius:10px;border:2.5px solid #ffd666;
+    box-shadow:0 0 0 5px rgba(255,214,102,.14)}
+
+  /* --- corner badge --- */
+  .ov-badge{right:56px;bottom:58px;display:flex;align-items:center;gap:9px;
+    padding:9px 16px;border-radius:999px;font-size:15px;font-weight:600;
+    letter-spacing:.02em;color:#cfe0f7;background:rgba(10,18,30,.6);
+    backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,.1)}
+  .ov-badge .live{width:9px;height:9px;border-radius:50%;background:#ff5a5a}
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c" width="1920" height="1080"></canvas>
+  <div id="overlays"><svg id="leaders"></svg></div>
+</div>
+<script type="module">
+const SPRING_PRESETS = {
+  screen: { stiffness: 200, damping: 40, mass: 2.25 },
+  zoom: { stiffness: 200, damping: 40, mass: 2.25 },
+  mouse: { stiffness: 470, damping: 70, mass: 3 },
+}
+
+const DEFAULTS = {
+  autoZoomLevel: 1.5,
+  alwaysKeepZoomedIn: false,
+  cursorSmoothing: true,
+  cursorSize: 1.5,
+  clickHighlight: true,
+  padding: 48,
+  cornerRadius: 12,
+  backgroundType: 'gradient',
+  backgroundGradientFrom: '#0e1720',
+  backgroundGradientTo: '#234156',
+  backgroundGradientAngle: 135,
+  shadowEnabled: true,
+  shadowBlur: 40,
+  shadowIntensity: 0.5,
+  shadowAngle: 90,
+  shadowDistance: 8,
+  snapToEdgesRatio: 0.25,
+}
+
+let cfg = null
+let frames = []
+let ranges = []
+let clicks = []
+let layers = []
+let screenLayer = null
+const canvas = document.getElementById('c')
+const ctx = canvas.getContext('2d')
+const video = document.createElement('video')
+video.muted = true
+video.playsInline = true
+video.preload = 'auto'
+const overlayRoot = document.getElementById('overlays')
+const leaders = document.getElementById('leaders')
+
+let camZoom, camFocus, cursorSpr, squish
+let lastT = null
+let curT = 0
+
+function makeSpring(x, y) { return { x, y, vx: 0, vy: 0 } }
+
+function stepSpring(s, tx, ty, p, dtMs) {
+  if (dtMs <= 0) return
+  const n = Math.max(1, Math.round(dtMs))
+  const dt = dtMs / n / 1000
+  for (let i = 0; i < n; i++) {
+    s.vx += (p.stiffness * (tx - s.x) - p.damping * s.vx) / p.mass * dt
+    s.vy += (p.stiffness * (ty - s.y) - p.damping * s.vy) / p.mass * dt
+    s.x += s.vx * dt
+    s.y += s.vy * dt
+  }
+}
+
+function stepScalar(s, target, k, c, m, dtMs) {
+  if (dtMs <= 0) return
+  const n = Math.max(1, Math.round(dtMs))
+  const dt = dtMs / n / 1000
+  for (let i = 0; i < n; i++) {
+    s.vx += (k * (target - s.x) - c * s.vx) / m * dt
+    s.x += s.vx * dt
+  }
+}
+
+function roundRectPath(c, x, y, w, h, r) {
+  c.beginPath()
+  c.moveTo(x + r, y)
+  c.arcTo(x + w, y, x + w, y + h, r)
+  c.arcTo(x + w, y + h, x, y + h, r)
+  c.arcTo(x, y + h, x, y, r)
+  c.arcTo(x, y, x + w, y, r)
+  c.closePath()
+}
+
+function hexToRgb(hex) {
+  const h = hex.replace('#', '')
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)]
+}
+
+function drawBackground(c) {
+  const a = (cfg.settings.backgroundGradientAngle ?? 135) * Math.PI / 180
+  const cx = canvas.width / 2, cy = canvas.height / 2
+  const len = Math.abs(canvas.width * Math.cos(a)) + Math.abs(canvas.height * Math.sin(a))
+  const g = c.createLinearGradient(
+    cx - Math.cos(a) * len / 2, cy - Math.sin(a) * len / 2,
+    cx + Math.cos(a) * len / 2, cy + Math.sin(a) * len / 2)
+  const [r1, g1, b1] = hexToRgb(cfg.settings.backgroundGradientFrom)
+  const [r2, g2, b2] = hexToRgb(cfg.settings.backgroundGradientTo)
+  g.addColorStop(0, `rgb(${r1},${g1},${b1})`)
+  g.addColorStop(1, `rgb(${r2},${g2},${b2})`)
+  c.fillStyle = g
+  c.fillRect(0, 0, canvas.width, canvas.height)
+}
+
+function layout() {
+  const s = cfg.settings
+  const pad = s.padding * (canvas.height / 1080)
+  const availW = canvas.width - pad * 2
+  const availH = canvas.height - pad * 2
+  const vw = video.videoWidth || cfg.displayPoints.w
+  const vh = video.videoHeight || cfg.displayPoints.h
+  const scale = Math.min(availW / vw, availH / vh)
+  const fw = vw * scale, fh = vh * scale
+  // The card *is* the video rect, centred — not the whole padded area. Using
+  // the padded rect pillarboxes any source whose aspect differs from the
+  // output, leaving the card's black fill visible down the sides.
+  const ix = (canvas.width - fw) / 2
+  const iy = (canvas.height - fh) / 2
+  return { ix, iy, iw: fw, ih: fh, fx: fw, fy: fh, cx: ix + fw / 2, cy: iy + fh / 2 }
+}
+
+/** Clamp a focus point (in *display points*) so the zoom window stays on-card. */
+function clampFocus(f, size, z) {
+  const half = size / (2 * z)
+  if (size / z >= size) return size / 2
+  return Math.min(Math.max(f, half), size - half)
+}
+
+function toFitted(L, px, py) {
+  return {
+    x: (px / cfg.displayPoints.w) * L.fx,
+    y: (py / cfg.displayPoints.h) * L.fy,
+  }
+}
+
+/** Where a point in capture space lands in the 1920x1080 output, *after* the
+ *  camera transform. This is what lets an overlay stick to a UI element while
+ *  the camera zooms and pans past it. */
+function screenToOutput(px, py) {
+  const L = layout()
+  const p = toFitted(L, px, py)
+  const z = camZoom.x
+  const f = toFitted(L,
+    clampFocus(camFocus.x, cfg.displayPoints.w, z),
+    clampFocus(camFocus.y, cfg.displayPoints.h, z))
+  return { x: L.cx + (p.x - f.x) * z, y: L.cy + (p.y - f.y) * z }
+}
+
+function drawFrame(hasVideo) {
+  const s = cfg.settings
+  const L = layout()
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  drawBackground(ctx)
+  if (!hasVideo) return
+
+  if (s.shadowEnabled) {
+    const rad = ((s.shadowAngle ?? 90) * Math.PI) / 180
+    ctx.save()
+    ctx.shadowColor = `rgba(0,0,0,${s.shadowIntensity ?? 0.5})`
+    ctx.shadowBlur = s.shadowBlur ?? 40
+    ctx.shadowOffsetX = Math.cos(rad) * (s.shadowDistance ?? 8)
+    ctx.shadowOffsetY = Math.sin(rad) * (s.shadowDistance ?? 8)
+    ctx.fillStyle = '#000'
+    roundRectPath(ctx, L.ix, L.iy, L.iw, L.ih, s.cornerRadius)
+    ctx.fill()
+    ctx.restore()
+  }
+
+  const z = camZoom.x
+  // Focus lives in display points and is converted here. Converting late
+  // matters: the card's fitted size and the capture's point size are different
+  // for any source whose scale factor isn't 1 (a 2560x1600 retina Electron
+  // capture is 1280x800 points), and mixing them silently mis-centres the zoom.
+  const f = toFitted(L,
+    clampFocus(camFocus.x, cfg.displayPoints.w, z),
+    clampFocus(camFocus.y, cfg.displayPoints.h, z))
+
+  ctx.save()
+  roundRectPath(ctx, L.ix, L.iy, L.iw, L.ih, s.cornerRadius)
+  ctx.clip()
+  ctx.translate(L.cx, L.cy)
+  ctx.scale(z, z)
+  ctx.translate(-f.x, -f.y)
+  ctx.drawImage(video, 0, 0, L.fx, L.fy)
+  drawClickRipples(L)
+  drawCursor(L)
+  ctx.restore()
+}
+
+function drawCursor(L) {
+  const s = cfg.settings
+  const p = toFitted(L, cursorSpr.x, cursorSpr.y)
+  const base = 36 * (s.cursorSize ?? 1) * (canvas.height / 1080)
+  const sq = squish.x
+  ctx.save()
+  ctx.translate(p.x, p.y)
+  // Counter-scale by the camera zoom. The cursor is drawn inside the zoom
+  // transform (so it tracks the right pixel), but a pointer that grows with
+  // the zoom reads as broken — real ones stay a fixed size on screen.
+  const inv = 1 / camZoom.x
+  ctx.scale(sq * inv, sq * inv)
+  const hgt = base * 1.55
+  ctx.beginPath()
+  ctx.moveTo(0, 0)
+  ctx.lineTo(0, hgt * 0.78)
+  ctx.lineTo(hgt * 0.20, hgt * 0.60)
+  ctx.lineTo(hgt * 0.32, hgt * 0.88)
+  ctx.lineTo(hgt * 0.44, hgt * 0.83)
+  ctx.lineTo(hgt * 0.32, hgt * 0.55)
+  ctx.lineTo(hgt * 0.52, hgt * 0.55)
+  ctx.closePath()
+  ctx.fillStyle = '#ffffff'
+  ctx.strokeStyle = 'rgba(0,0,0,0.85)'
+  ctx.lineWidth = base * 0.075
+  ctx.lineJoin = 'round'
+  ctx.fill()
+  ctx.stroke()
+  ctx.restore()
+}
+
+function drawClickRipples(L) {
+  if (!cfg.settings.clickHighlight) return
+  for (const c of clicks) {
+    const age = curT - c.t
+    if (age < 0 || age > 450) continue
+    const p = toFitted(L, c.x, c.y)
+    const prog = age / 450
+    const inv = 1 / camZoom.x
+    const r = (14 + 42 * prog) * (L.fy / cfg.displayPoints.h) * inv
+    ctx.save()
+    ctx.beginPath()
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
+    ctx.fillStyle = `rgba(255,255,255,${0.35 * (1 - prog)})`
+    ctx.fill()
+    ctx.beginPath()
+    ctx.arc(p.x, p.y, r * 0.62, 0, Math.PI * 2)
+    ctx.strokeStyle = `rgba(255,214,102,${0.6 * (1 - prog)})`
+    ctx.lineWidth = 3 * (L.fy / cfg.displayPoints.h) * inv
+    ctx.stroke()
+    ctx.restore()
+  }
+}
+
+// --- overlay layers -------------------------------------------------------
+
+const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v)
+const easeOut = (t) => 1 - Math.pow(1 - t, 3)
+const easeBack = (t) => {
+  const c = 1.70158 + 1
+  return 1 + c * Math.pow(t - 1, 3) + 1.70158 * Math.pow(t - 1, 2)
+}
+
+const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+
+function buildNode(l) {
+  const el = document.createElement('div')
+  el.className = `ov ov-${l.type}${l.tone ? ' ' + l.tone : ''}`
+  if (l.type === 'title' || l.type === 'outro') {
+    el.className = 'ov ov-title'
+    el.innerHTML =
+      (l.kicker ? `<div class="kicker">${esc(l.kicker)}</div>` : '') +
+      `<div class="head">${esc(l.head)}</div>` +
+      `<div class="rule"></div>` +
+      (l.sub ? `<div class="sub">${esc(l.sub)}</div>` : '')
+  } else if (l.type === 'lower') {
+    el.innerHTML = `<div class="num">${esc(l.num)}</div><div class="txt">${esc(l.text)}</div>`
+  } else if (l.type === 'toast') {
+    el.innerHTML =
+      `<div class="icon">${esc(l.icon ?? '✓')}</div>` +
+      `<div><div class="t">${esc(l.title)}</div>` +
+      (l.body ? `<div class="b">${esc(l.body)}</div>` : '') + `</div>`
+  } else if (l.type === 'callout') {
+    el.innerHTML = `${esc(l.text)}${l.sub ? `<span class="sub">${esc(l.sub)}</span>` : ''}`
+    // Anchored callouts get a ring on the target plus a leader line to the label.
+    const ring = document.createElement('div')
+    ring.className = 'ov ov-ring'
+    overlayRoot.appendChild(ring)
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+    line.setAttribute('stroke', '#ffd666')
+    line.setAttribute('stroke-width', '2.5')
+    line.setAttribute('stroke-linecap', 'round')
+    leaders.appendChild(line)
+    l._ring = ring
+    l._line = line
+  } else if (l.type === 'badge') {
+    el.innerHTML = `<span class="live"></span>${esc(l.text)}`
+  }
+  overlayRoot.appendChild(el)
+  return el
+}
+
+/** Place an anchored node so it clears its target's *box* rather than its
+ *  centre point, flipping to whichever side has room. */
+function place(el, at, l) {
+  const w = el.offsetWidth
+  const h = el.offsetHeight
+  const gap = l.gap ?? 20
+  let side = l.place ?? 'auto'
+  if (side === 'auto') side = at.y < canvas.height * 0.46 ? 'below' : 'above'
+  let x = at.x - w / 2
+  let y = side === 'below' ? at.y + at.h / 2 + gap : at.y - at.h / 2 - gap - h
+  if (side === 'left') { x = at.x - at.w / 2 - gap - w; y = at.y - h / 2 }
+  if (side === 'right') { x = at.x + at.w / 2 + gap; y = at.y - h / 2 }
+  x += l.dx ?? 0
+  y += l.dy ?? 0
+  const m = 44
+  x = Math.max(m, Math.min(canvas.width - m - w, x))
+  y = Math.max(m, Math.min(canvas.height - m - h, y))
+  return { x, y, w, h }
+}
+
+function updateOverlays(t) {
+  for (const l of layers) {
+    if (l.type === 'screen') continue
+    const el = l._el
+    const inMs = l.enterMs ?? 380
+    const outMs = l.exitMs ?? 320
+    if (t < l.startMs - 1 || t > l.endMs + 1) {
+      el.style.opacity = '0'
+      if (l._ring) { l._ring.style.opacity = '0'; l._line.setAttribute('stroke-opacity', '0') }
+      continue
+    }
+    const a = clamp01((t - l.startMs) / inMs)
+    const b = clamp01((l.endMs - t) / outMs)
+    const op = Math.min(easeOut(a), easeOut(b))
+    const motion = l.motion ?? (l.type === 'toast' ? 'pop' : 'rise')
+
+    let tf = ''
+    if (motion === 'rise') tf = `translateY(${(1 - easeOut(a)) * 26 - (1 - easeOut(b)) * 10}px)`
+    else if (motion === 'pop') tf = `scale(${0.9 + 0.1 * easeBack(a)})`
+    else if (motion === 'zoom') tf = `scale(${1 + (1 - easeOut(a)) * 0.06})`
+
+    if (l.anchor) {
+      // The anchor is a rect in capture space, so it follows the camera: it
+      // scales with the zoom and pans with the focus, staying welded to the UI
+      // element it was resolved from.
+      const L = layout()
+      const s = (L.fx / cfg.displayPoints.w) * camZoom.x
+      const pad = l.ringPad ?? 10
+      const at = screenToOutput(l.anchor.x, l.anchor.y)
+      at.w = (l.anchor.w ?? 0) * s + pad * 2
+      at.h = (l.anchor.h ?? 0) * s + pad * 2
+      el.style.opacity = String(op)
+      el.style.transform = tf
+      const box = place(el, at, l)
+      el.style.left = `${box.x}px`
+      el.style.top = `${box.y}px`
+      if (l._ring) {
+        const grow = 0.6 + 0.4 * easeBack(a)
+        const rw = at.w * grow
+        const rh = at.h * grow
+        l._ring.style.opacity = String(op)
+        l._ring.style.width = `${rw}px`
+        l._ring.style.height = `${rh}px`
+        l._ring.style.left = `${at.x - rw / 2}px`
+        l._ring.style.top = `${at.y - rh / 2}px`
+        // Leader runs from the ring's edge to the nearest edge of the label.
+        const ex = Math.max(at.x - at.w / 2, Math.min(at.x + at.w / 2, box.x + box.w / 2))
+        const ey = Math.max(at.y - at.h / 2, Math.min(at.y + at.h / 2, box.y + box.h / 2))
+        const lx = Math.max(box.x, Math.min(box.x + box.w, at.x))
+        const ly = Math.max(box.y, Math.min(box.y + box.h, at.y))
+        l._line.setAttribute('x1', ex)
+        l._line.setAttribute('y1', ey)
+        l._line.setAttribute('x2', lx)
+        l._line.setAttribute('y2', ly)
+        l._line.setAttribute('stroke-opacity', String(op * 0.8))
+      }
+    } else {
+      el.style.opacity = String(op)
+      el.style.transform = tf
+    }
+  }
+}
+
+// --- lifecycle ------------------------------------------------------------
+
+window.init = async function (config) {
+  cfg = config
+  cfg.settings = { ...DEFAULTS, ...config.settings }
+  ranges = config.zoomRanges || []
+  frames = config.frames
+  // The compositor's *video* clock is video time (0 = first captured frame).
+  // Cursor samples carry wall-clock stamps from the capture, so rebase them.
+  const t0 = config.videoT0 ?? frames[0].t
+  frames.forEach((f) => (f.t -= t0))
+  clicks = []
+  let prev = false
+  for (const f of frames) {
+    if (f.l && !prev) clicks.push({ t: f.t, x: f.x, y: f.y })
+    prev = !!f.l
+  }
+  ranges = ranges.map((r) => ({ ...r, start: r.start - t0, end: r.end - t0 }))
+
+  layers = (config.layers && config.layers.length)
+    ? config.layers.map((l) => ({ ...l }))
+    : [{ type: 'screen', startMs: 0, endMs: config.durationMs, sourceOffsetMs: 0 }]
+  screenLayer = layers.find((l) => l.type === 'screen')
+  if (!screenLayer) throw new Error('compositor: timeline has no screen layer')
+  screenLayer.sourceOffsetMs = screenLayer.sourceOffsetMs ?? 0
+  for (const l of layers) if (l.type !== 'screen') l._el = buildNode(l)
+
+  video.src = config.videoUrl
+  await new Promise((res, rej) => {
+    video.onloadedmetadata = res
+    video.onerror = () => rej(new Error('video load failed'))
+  })
+  const first = frames.find((f) => f.t >= 0) ?? frames[frames.length - 1]
+  camZoom = { x: 1, vx: 0 }
+  camFocus = makeSpring(first.x, first.y)
+  cursorSpr = makeSpring(first.x, first.y)
+  squish = { x: 1, vx: 0 }
+  window.__ready = true
+}
+
+// Seek and resolve once the frame is actually decoded. Seeking to the time the
+// video is *already* at fires no 'seeked' event, so the naive version deadlocks
+// on frame 0 (currentTime is already 0). Resolve directly in that case.
+function seekTo(ms) {
+  return new Promise((resolve, reject) => {
+    const target = Math.max(0, Math.min(ms / 1000, video.duration - 0.001))
+    if (Math.abs(video.currentTime - target) < 0.001) { resolve(); return }
+    const timer = setTimeout(() => {
+      video.removeEventListener('seeked', onSeeked)
+      reject(new Error(`seek to ${ms}ms timed out`))
+    }, 10000)
+    const onSeeked = () => {
+      clearTimeout(timer)
+      video.removeEventListener('seeked', onSeeked)
+      resolve()
+    }
+    video.addEventListener('seeked', onSeeked)
+    video.currentTime = target
+  })
+}
+
+/**
+ * Render one frame of *timeline* time.
+ *
+ * Timeline time and video time are no longer the same thing: the screen layer
+ * can start late (title card first) and can be trimmed via sourceOffsetMs.
+ * Everything camera-related runs on video time; overlays run on timeline time.
+ */
+window.step = async function (t) {
+  const active = t >= screenLayer.startMs && t <= screenLayer.endMs
+  const vt = t - screenLayer.startMs + screenLayer.sourceOffsetMs
+  curT = vt
+
+  if (!active) {
+    // Nothing to seek — hold the camera where it is and just paint the ground.
+    drawFrame(false)
+    updateOverlays(t)
+    return
+  }
+
+  await seekTo(vt)
+  const dt = lastT === null ? 0 : vt - lastT
+  lastT = vt
+  const r = ranges.find((x) => vt >= x.start && vt <= x.end)
+  stepScalar(camZoom, r ? r.zoom : 1,
+    SPRING_PRESETS.zoom.stiffness, SPRING_PRESETS.zoom.damping, SPRING_PRESETS.zoom.mass, dt)
+  const fz = r
+    ? { x: clampFocus(r.fx, cfg.displayPoints.w, r.zoom), y: clampFocus(r.fy, cfg.displayPoints.h, r.zoom) }
+    : { x: cfg.displayPoints.w / 2, y: cfg.displayPoints.h / 2 }
+  stepSpring(camFocus, fz.x, fz.y, SPRING_PRESETS.screen, dt)
+  const raw = frames.length ? sampleCursor(vt) : cursorSpr
+  if (cfg.settings.cursorSmoothing) stepSpring(cursorSpr, raw.x, raw.y, SPRING_PRESETS.mouse, dt)
+  else { cursorSpr.x = raw.x; cursorSpr.y = raw.y }
+  if (clicks.some((c) => vt - c.t >= 0 && vt - c.t < dt + 1)) squish.vx -= 6
+  stepScalar(squish, 1, 1200, 34, 1, dt)
+  drawFrame(true)
+  updateOverlays(t)
+}
+
+function sampleCursor(t) {
+  let best = frames[0]
+  let lo = 0, hi = frames.length - 1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (frames[mid].t <= t) { best = frames[mid]; lo = mid + 1 } else hi = mid - 1
+  }
+  return best
+}
+</script>
+</body>
+</html>

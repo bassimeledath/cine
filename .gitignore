@@ -1,0 +1,13 @@
+node_modules/
+demo/electron-app/node_modules/
+
+# Compiled native helper (rebuild with `npm run build:native`)
+native/cursor-logger
+
+# Output artifacts
+*.mp4
+raw.mp4
+cursor.jsonl
+meta.json
+
+.DS_Store
