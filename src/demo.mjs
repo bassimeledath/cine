@@ -1,274 +1,192 @@
-// End-to-end autonomous demo: launch the page, record the screen while a
-// scripted driver operates it with the real cursor, then author zooms and
-// render the cinematic cut. No human in the loop.
-
-import { spawn } from 'node:child_process'
-import { createRequire } from 'node:module'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, mkdirSync } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
-import { join, dirname } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import puppeteer from 'puppeteer-core'
+import { resolveRuntime } from './runtime/host.mjs'
+import { launchElectron } from './runtime/electron.mjs'
+import { sleep } from './runtime/process.mjs'
+import { captureChromium } from './capture/chromium.mjs'
+import { authorProject, renderProject } from './projects.mjs'
+import { runActions } from './actions/runner.mjs'
+import {
+  WEB_SCRIPT,
+  ELECTRON_SCRIPT,
+  ELECTRON_ANCHORS,
+} from './examples/recipes.mjs'
+export { ELECTRON_SCRIPT, ELECTRON_ANCHORS } from './examples/recipes.mjs'
 
-import { startCapture } from './capture.mjs'
-import { captureWeb } from './capture-web.mjs'
-import { buildZoomRanges } from './autozoom.mjs'
-import { render } from './render.mjs'
-import { clickElement, glideTo, sleep, hasCliclick } from './drive.mjs'
+const DEMO_URL = new URL('../demo/index.html', import.meta.url).href
+const ELECTRON_APP = fileURLToPath(
+  new URL('../demo/electron-app', import.meta.url),
+)
+function workDir(path) {
+  path ??= mkdtempSync(join(tmpdir(), 'cine-session-'))
+  mkdirSync(path, { recursive: true })
+  return path
+}
 
-const HERE = dirname(fileURLToPath(import.meta.url))
-const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
-const DEMO_PAGE = join(HERE, '..', 'demo', 'index.html')
-const ELECTRON_APP = join(HERE, '..', 'demo', 'electron-app')
-
-/** The demo beat sheet. Pacing is the whole game — each click needs room to
- *  land before the next move starts, or the viewer can't follow it. */
-const SCRIPT = [
-  { selector: '#refresh', dwellMs: 2200, label: 'Refresh data' },
-  { selector: '#deploy', dwellMs: 2600, label: 'Deploy to production' },
-  { selector: '.tab[data-tab="Reports"]', dwellMs: 2000, label: 'Reports tab' },
-  { selector: '.tab[data-tab="Alerts"]', dwellMs: 2200, label: 'Alerts tab' },
-]
-
-/**
- * Fully headless demo. No display, no cursor takeover, deterministic.
- * Reuses stages 2 and 3 untouched — only the capture backend differs.
- */
 export async function runWebDemo({
   outPath = join(homedir(), 'Downloads', 'cine-demo.mp4'),
-  displayPoints = { w: 1470, h: 956 },
+  workDir: directory,
   fps = 30,
-  url = pathToFileURL(DEMO_PAGE).href,
+  url = DEMO_URL,
   connectTo,
-  beats = SCRIPT,
+  targetUrl,
+  beats = WEB_SCRIPT,
+  runtime,
+  displayPoints,
+  leadInMs,
+  tailMs,
+  inspectionDir,
 } = {}) {
-  const work = mkdtempSync(join(tmpdir(), 'cine-web-'))
-  const videoPath = join(work, 'raw.mp4')
-  const cursorPath = join(work, 'cursor.jsonl')
-
-  console.log(connectTo ? `attaching to ${connectTo}...` : 'capturing headlessly...')
-  const { videoT0, durationMs, displayPoints: actualPoints } = await captureWeb({
+  runtime ??= await resolveRuntime()
+  const work = workDir(directory)
+  const capture = await captureChromium({
     url,
     connectTo,
+    targetUrl,
     beats,
-    videoPath,
-    cursorPath,
+    runtime,
+    fps,
     displayPoints,
-    fps,
-    onProgress: (ms, total) => {
-      const step = 2000
-      if (Math.floor(ms / step) !== Math.floor((ms - 10) / step)) {
-        console.log(`  capture ${(ms / 1000).toFixed(0)}s / ${(total / 1000).toFixed(0)}s`)
-      }
-    },
+    leadInMs,
+    tailMs,
+    videoPath: join(work, 'raw.mp4'),
+    cursorPath: join(work, 'cursor.jsonl'),
   })
-  console.log(`captured ${(durationMs / 1000).toFixed(1)}s`)
-
-  const frames = readFileSync(cursorPath, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))
-  const zoomRanges = buildZoomRanges(frames)
-  console.log(`authored ${zoomRanges.length} zoom range(s) from ${frames.length} cursor samples`)
-  if (!zoomRanges.length) console.warn('WARNING: no clicks in the cursor track — output will not zoom')
-
-  console.log('rendering...')
-  await render({
-    video: videoPath,
-    cursor: cursorPath,
-    zoomRanges,
-    durationMs,
-    fps,
-    displayPoints: actualPoints ?? displayPoints,
-    videoT0,
-    settings: {},
-    outPath,
-  })
-  return outPath
+  const projectPath = join(work, 'project.json')
+  authorProject(capture.manifestPath, projectPath)
+  return renderProject(projectPath, { outPath, runtime, inspectionDir })
 }
 
-/** Beat sheet for the bundled Electron demo app. */
-export const ELECTRON_SCRIPT = [
-  { selector: '#sync', dwellMs: 2000, label: 'Sync' },
-  { selector: '#deploy', dwellMs: 2600, label: 'Deploy' },
-  { selector: '.item[data-view="Services"]', dwellMs: 2000, label: 'Services' },
-  { selector: '.item[data-view="Incidents"]', dwellMs: 2200, label: 'Incidents' },
-]
-
-/** UI elements worth being able to point at later. Resolved at capture time
- *  and saved with the artifacts, so an overlay pass can anchor to them without
- *  the app still being alive. */
-export const ELECTRON_ANCHORS = [
-  '#sync', '#deploy', '#m1', '#m2', '#m3',
-  '#list .row:first-child', '.item[data-view="Incidents"]',
-]
-
-/**
- * Capture only — launch the app, drive it, and leave raw.mp4 + cursor.jsonl +
- * meta.json in `workDir`. Splitting this out is what makes an edit cheap: the
- * render is a pure function of these artifacts, so retiming an overlay or
- * changing a sound is a re-render, not a re-recording.
- */
-export async function captureElectron({ workDir, fps = 30, port = 9223 }) {
-  const electronBin = createRequire(import.meta.url)('electron')
-  console.log('launching bundled Electron demo app...')
-  const proc = spawn(electronBin, [ELECTRON_APP], {
-    env: { ...process.env, CINE_CDP_PORT: String(port) },
-    stdio: 'ignore',
-  })
+export async function captureElectron({
+  workDir: directory,
+  fps = 30,
+  runtime,
+  beats = ELECTRON_SCRIPT,
+  leadInMs,
+  tailMs,
+} = {}) {
+  runtime ??= await resolveRuntime()
+  const work = workDir(directory),
+    host = await launchElectron(ELECTRON_APP)
   try {
-    await waitForCdp(`http://localhost:${port}`)
     await sleep(600)
-    const videoPath = join(workDir, 'raw.mp4')
-    const cursorPath = join(workDir, 'cursor.jsonl')
-    console.log(`attaching to http://localhost:${port}...`)
-    const meta = await captureWeb({
-      connectTo: `http://localhost:${port}`,
-      beats: ELECTRON_SCRIPT,
+    return await captureChromium({
+      connectTo: host.endpoint,
+      beats,
       anchorSelectors: ELECTRON_ANCHORS,
-      videoPath,
-      cursorPath,
       fps,
+      runtime,
+      leadInMs,
+      tailMs,
+      videoPath: join(work, 'raw.mp4'),
+      cursorPath: join(work, 'cursor.jsonl'),
     })
-    const { videoT0, durationMs, displayPoints, anchors } = meta
-    writeFileSync(
-      join(workDir, 'meta.json'),
-      JSON.stringify({ videoT0, durationMs, displayPoints, anchors, fps }, null, 2),
-    )
-    console.log(`captured ${(durationMs / 1000).toFixed(1)}s -> ${workDir}`)
-    return { videoPath, cursorPath, videoT0, durationMs, displayPoints, anchors, fps }
   } finally {
-    proc.kill()
+    await host.stop()
   }
 }
 
-/** Poll a CDP endpoint until the host is accepting connections. */
-async function waitForCdp(base, timeoutMs = 20000) {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(`${base}/json/version`)
-      if (res.ok) return
-    } catch { /* not up yet */ }
-    await sleep(200)
-  }
-  throw new Error(`no CDP endpoint at ${base} after ${timeoutMs}ms`)
-}
-
-/**
- * Record an Electron app. Attaches over CDP exactly like the web backend —
- * Electron *is* Chromium — so capture, cursor authoring, auto-zoom and the
- * compositor are all unchanged.
- *
- * Caveat worth knowing: Page.screencast captures the WebContents, not the
- * window. Native title bars, menus, dialogs, and any additional BrowserWindow
- * are not in the frame.
- */
 export async function runElectronDemo({
   outPath = join(homedir(), 'Downloads', 'cine-electron-demo.mp4'),
-  fps = 30,
+  workDir: directory,
   connectTo,
-  port = 9223,
+  targetUrl,
+  runtime,
+  fps = 30,
+  beats = ELECTRON_SCRIPT,
+  leadInMs,
+  tailMs,
+  inspectionDir,
 } = {}) {
-  // Attach to someone else's already-running app and leave it alone.
-  if (connectTo) {
-    return runWebDemo({ outPath, fps, connectTo, beats: ELECTRON_SCRIPT })
-  }
-
-  const electronBin = createRequire(import.meta.url)('electron')
-  console.log('launching bundled Electron demo app...')
-  const proc = spawn(electronBin, [ELECTRON_APP], {
-    env: { ...process.env, CINE_CDP_PORT: String(port) },
-    stdio: 'ignore',
-  })
-  try {
-    await waitForCdp(`http://localhost:${port}`)
-    await sleep(600) // let first paint settle
-    return await runWebDemo({
+  runtime ??= await resolveRuntime()
+  if (connectTo)
+    return runWebDemo({
       outPath,
+      workDir: directory,
+      connectTo,
+      targetUrl,
+      beats,
+      runtime,
       fps,
-      connectTo: `http://localhost:${port}`,
-      beats: ELECTRON_SCRIPT,
+      leadInMs,
+      tailMs,
+      inspectionDir,
     })
-  } finally {
-    proc.kill()
-  }
+  const work = workDir(directory)
+  const capture = await captureElectron({
+    workDir: work,
+    runtime,
+    fps,
+    beats,
+    leadInMs,
+    tailMs,
+  })
+  const projectPath = join(work, 'project.json')
+  authorProject(capture.manifestPath, projectPath)
+  return renderProject(projectPath, { outPath, runtime, inspectionDir })
 }
 
 export async function runDemo({
-  outPath = join(homedir(), 'Downloads', 'cine-demo.mp4'),
-  displayPoints = { w: 1470, h: 956 },
+  outPath = join(homedir(), 'Downloads', 'cine-native-demo.mp4'),
+  workDir: directory,
+  runtime,
   fps = 30,
+  url = DEMO_URL,
+  beats = WEB_SCRIPT,
   leadInMs = 1400,
   tailMs = 1600,
+  inspectionDir,
 } = {}) {
-  if (!(await hasCliclick())) {
-    throw new Error('cliclick not found — install with: brew install cliclick')
-  }
-
-  const work = mkdtempSync(join(tmpdir(), 'cine-demo-'))
-  const videoPath = join(work, 'raw.mp4')
-  const cursorPath = join(work, 'cursor.jsonl')
-
-  console.log('launching demo page...')
-  const browser = await puppeteer.launch({
-    executablePath: CHROME,
-    headless: false,
-    ignoreDefaultArgs: ['--enable-automation'],
-    args: ['--kiosk', '--no-default-browser-check', '--disable-infobars', '--hide-crash-restore-bubble'],
-  })
-
-  let capture = null
+  runtime ??= await resolveRuntime()
+  const { startCapture, mainDisplay } =
+    await import('./platform/macos/capture.mjs')
+  const { macosDriver } = await import('./platform/macos/input.mjs')
+  const geometry = mainDisplay(),
+    work = workDir(directory)
+  let browser, recording
   try {
-    const page = (await browser.pages())[0] ?? (await browser.newPage())
-    await page.goto(pathToFileURL(DEMO_PAGE).href, { waitUntil: 'load' })
-    await sleep(800) // let the bar animation settle before we start recording
-
-    console.log('starting capture...')
-    capture = await startCapture({ videoPath, cursorPath, fps })
-    console.log(`  video t0 locked`)
-
-    // Park the cursor somewhere neutral, then hold for a beat so the video
-    // opens on a calm, un-zoomed frame.
-    let cursor = { x: displayPoints.w * 0.5, y: displayPoints.h * 0.72 }
-    await glideTo({ x: cursor.x, y: cursor.y + 60 }, cursor, 200)
-    await sleep(leadInMs)
-
-    for (const beat of SCRIPT) {
-      console.log(`  → ${beat.label}`)
-      cursor = await clickElement(page, cursor, beat.selector)
-      await sleep(beat.dwellMs)
-    }
-
-    await sleep(tailMs)
-
-    const { videoT0, durationMs } = await capture.stop()
-    capture = null
-    console.log(`captured ${(durationMs / 1000).toFixed(1)}s`)
-
-    await browser.close()
-
-    // --- author zooms from the real cursor track ---
-    const frames = readFileSync(cursorPath, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))
-    const zoomRanges = buildZoomRanges(frames)
-    console.log(`authored ${zoomRanges.length} zoom range(s) from ${frames.length} cursor samples`)
-    if (!zoomRanges.length) {
-      console.warn('WARNING: no clicks detected in the cursor log — output will not zoom')
-    }
-
-    console.log('rendering...')
-    await render({
-      video: videoPath,
-      cursor: cursorPath,
-      zoomRanges,
-      durationMs,
-      fps,
-      displayPoints,
-      videoT0,
-      settings: {},
-      outPath,
+    browser = await puppeteer.launch({
+      executablePath: runtime.chrome,
+      headless: false,
+      defaultViewport: null,
+      args: ['--kiosk', '--no-default-browser-check', '--disable-infobars'],
     })
-    return outPath
+    const page = (await browser.pages())[0]
+    await page.goto(url, { waitUntil: 'networkidle0' })
+    await page.bringToFront()
+    const client = await page.createCDPSession()
+    recording = await startCapture({
+      videoPath: join(work, 'raw.mp4'),
+      cursorPath: join(work, 'cursor.jsonl'),
+      runtime,
+      fps,
+      geometry,
+    })
+    await runActions(beats, macosDriver(page, client), {
+      start: {
+        x: geometry.x + geometry.w / 2,
+        y: geometry.y + geometry.h * 0.72,
+      },
+      onAction: recording.onAction,
+      onEvent: recording.onEvent,
+      leadInMs,
+      tailMs,
+    })
+    const capture = await recording.stop()
+    recording = null
+    await browser.close()
+    browser = null
+    const projectPath = join(work, 'project.json')
+    authorProject(capture.manifestPath, projectPath)
+    return await renderProject(projectPath, { outPath, runtime, inspectionDir })
   } finally {
-    if (capture) await capture.stop().catch(() => {})
-    if (browser.connected) await browser.close().catch(() => {})
+    try {
+      if (recording) await recording.abort()
+    } finally {
+      if (browser) await browser.close()
+    }
   }
 }

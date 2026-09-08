@@ -1,0 +1,71 @@
+
+  html,body{margin:0;padding:0;background:#000;width:100%;height:100%;overflow:hidden}
+  #stage{position:relative;width:100%;height:100%}
+  #c{position:absolute;inset:0;display:block}
+
+  /* Overlays are real DOM composited by the page screenshot, not canvas draw
+     calls. That's the whole trick: web fonts, flexbox, blur, shadows and SVG
+     all come for free, and a layer is a style update rather than a paint
+     routine. */
+  #overlays{position:absolute;inset:0;pointer-events:none;
+    font-family:var(--font-family);
+    -webkit-font-smoothing:antialiased}
+  #leaders{position:absolute;inset:0;width:100%;height:100%}
+  .ov{position:absolute;opacity:0;will-change:transform,opacity}
+
+  /* --- full-frame title / outro --- */
+  .ov-title{inset:0;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:18px;color:var(--text);
+    background:var(--title-background)}
+  .ov-title .kicker{font-size:19px;font-weight:600;letter-spacing:.22em;
+    text-transform:uppercase;color:var(--muted)}
+  .ov-title .head{font-size:82px;font-weight:700;letter-spacing:-.025em}
+  .ov-title .sub{font-size:26px;font-weight:400;color:var(--muted)}
+  .ov-title .rule{width:96px;height:3px;border-radius:2px;background:var(--brand)}
+
+  /* --- lower-third chapter marker --- */
+  .ov-lower{left:64px;bottom:56px;display:flex;align-items:center;gap:14px;
+    padding:13px 22px 13px 14px;border-radius:14px;color:var(--text);
+    background:rgba(10,18,30,.72);backdrop-filter:blur(18px);
+    border:1px solid rgba(255,255,255,.12);
+    box-shadow:0 18px 44px rgba(0,0,0,.42)}
+  .ov-lower .num{width:32px;height:32px;border-radius:9px;background:var(--brand);
+    display:flex;align-items:center;justify-content:center;
+    font-size:15px;font-weight:700}
+  .ov-lower .txt{font-size:22px;font-weight:600;letter-spacing:-.01em}
+
+  /* --- anchored toast --- */
+  .ov-toast{display:flex;align-items:flex-start;gap:13px;max-width:430px;
+    padding:15px 19px;border-radius:15px;color:var(--text);
+    background:rgba(14,24,40,.82);backdrop-filter:blur(20px) saturate(1.3);
+    border:1px solid rgba(255,255,255,.14);
+    box-shadow:0 22px 54px rgba(0,0,0,.5)}
+  .ov-toast .icon{width:30px;height:30px;border-radius:50%;flex:none;
+    display:flex;align-items:center;justify-content:center;
+    font-size:16px;font-weight:700;background:var(--brand);color:#fff}
+  .ov-toast.good .icon{background:#22c07d}
+  .ov-toast.warn .icon{background:#ffb020;color:#241a00}
+  .ov-toast .t{font-size:20px;font-weight:650;letter-spacing:-.01em}
+  .ov-toast .b{font-size:16px;color:var(--muted);margin-top:3px;line-height:1.35}
+
+  /* --- anchored callout (label + leader line to a UI element) --- */
+  .ov-callout{padding:10px 16px;border-radius:11px;font-size:19px;
+    font-weight:600;color:#0b1220;background:var(--accent);
+    box-shadow:0 14px 34px rgba(0,0,0,.4);white-space:nowrap}
+  .ov-callout .sub{display:block;font-size:14px;font-weight:500;
+    color:#6b5a1f;margin-top:1px}
+  /* Sized in JS to the captured element rect — it circles the thing it's
+     pointing at rather than sitting on top of it. */
+  .ov-ring{border-radius:10px;border:2.5px solid var(--accent);
+    box-shadow:0 0 0 5px rgba(255,214,102,.14)}
+
+  /* --- corner badge --- */
+  .ov-badge{right:56px;bottom:58px;display:flex;align-items:center;gap:9px;
+    padding:9px 16px;border-radius:999px;font-size:15px;font-weight:600;
+    letter-spacing:.02em;color:var(--text);background:rgba(10,18,30,.6);
+    backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,.1)}
+  .ov-badge .live{width:9px;height:9px;border-radius:50%;background:#ff5a5a}
+
+.ov-title .head{max-width:90%;text-align:center;overflow-wrap:anywhere}
+.ov-title .sub{max-width:85%;text-align:center}
+#stage{transform-origin:top left}

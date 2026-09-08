@@ -1,0 +1,86 @@
+{
+  "sources": [
+    {
+      "name": "keyboard",
+      "source": "https://freesound.org/people/khenshom/sounds/565645/",
+      "download": "https://cdn.freesound.org/previews/565/565645_6652872-hq.mp3",
+      "license": "CC0-1.0",
+      "licenseURL": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "sourceSHA256": "83423e46d3ba602474a758aa768272174e0e3e100f1febdad753b8c99841e916"
+    },
+    {
+      "name": "mouse",
+      "source": "https://freesound.org/people/Pixeliota/sounds/678248/",
+      "download": "https://cdn.freesound.org/previews/678/678248_7806746-hq.mp3",
+      "license": "CC0-1.0",
+      "licenseURL": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "sourceSHA256": "a8d0369a986abe53067b160e0fe902e1a6ebfdfc5ce443ac67a37185fc04462d"
+    }
+  ],
+  "processing": "48k mono PCM; fixed intervals; DC removal; 6.5kHz lowpass; 2/12ms fades; fixed peak normalization. No synthesized audio.",
+  "samples": [
+    {
+      "file": "key-1.wav",
+      "source": "keyboard",
+      "fromSeconds": 1.55,
+      "toSeconds": 1.66,
+      "sha256": "5058460301e5e777b14491295a6721a49431f9bd651f5bb08423e98a4e0e7797"
+    },
+    {
+      "file": "key-2.wav",
+      "source": "keyboard",
+      "fromSeconds": 1.855,
+      "toSeconds": 1.95,
+      "sha256": "6b1ee65bc6e9ff78a7914b40768828674ed1879f7527be5dd9cbac777945d64b"
+    },
+    {
+      "file": "key-3.wav",
+      "source": "keyboard",
+      "fromSeconds": 2.09,
+      "toSeconds": 2.2,
+      "sha256": "f0d800747a2626ae9bc7cd24aee21ee66e31cc5b6afc749e4c5cb8581795ac35"
+    },
+    {
+      "file": "key-4.wav",
+      "source": "keyboard",
+      "fromSeconds": 2.8,
+      "toSeconds": 2.92,
+      "sha256": "f7bd5e74dc41d4e62072aa1355b6a7a435051c2480f4a3fa449c8dcb5cf42f06"
+    },
+    {
+      "file": "key-5.wav",
+      "source": "keyboard",
+      "fromSeconds": 4.31,
+      "toSeconds": 4.42,
+      "sha256": "bb776054cf01d757511f7a61d156952e76d1a573ebdcf9f38b358c061ae95024"
+    },
+    {
+      "file": "key-6.wav",
+      "source": "keyboard",
+      "fromSeconds": 5.235,
+      "toSeconds": 5.34,
+      "sha256": "eba44836cd581551c38e15fbf112734c1a169697dd563446de435be604437067"
+    },
+    {
+      "file": "key-7.wav",
+      "source": "keyboard",
+      "fromSeconds": 5.83,
+      "toSeconds": 5.94,
+      "sha256": "e9143ce6cf8557ff22f8761306ebc4ae73360401c6e66cbf78f257d26ff3e69a"
+    },
+    {
+      "file": "key-8.wav",
+      "source": "keyboard",
+      "fromSeconds": 6.005,
+      "toSeconds": 6.115,
+      "sha256": "cc6eb35122729262e9bc09a01de7242834e12dc0699f010f9479e5ef12729ec8"
+    },
+    {
+      "file": "mouse.wav",
+      "source": "mouse",
+      "fromSeconds": 0.377,
+      "toSeconds": 0.535,
+      "sha256": "be224ce5561f064988f14217b45a9fa55f81e302b7af7c11db2708f78602eb13"
+    }
+  ]
+}

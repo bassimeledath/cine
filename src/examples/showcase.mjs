@@ -6,29 +6,32 @@
 // actually happened rather than to hand-counted stopwatch values. That's the
 // part a general-purpose video tool can't do, because it never saw the capture.
 
-import { readFileSync } from 'node:fs'
-import { autoCues } from './audio.mjs'
+import { readCursor } from '../capture/artifacts.mjs'
+import { findClicks } from '../core/events.mjs'
+import { autoCues } from '../media/audio.mjs'
 
 /** Rising-edge click extraction, in video time. */
 export function clicksFrom(cursorPath, videoT0) {
-  const frames = readFileSync(cursorPath, 'utf8').trim().split('\n').filter(Boolean)
-    .map((l) => JSON.parse(l))
-  const out = []
-  let prev = false
-  for (const f of frames) {
-    if (f.l && !prev) out.push({ t: f.t - videoT0, x: f.x, y: f.y })
-    prev = !!f.l
-  }
-  return out
+  return findClicks(readCursor(cursorPath)).map((c) => ({
+    ...c,
+    t: c.t - videoT0,
+  }))
 }
 
 const TITLE_MS = 3000
-const LEAD_IN = 2600   // screen starts here; the title fades out over the overlap
+const LEAD_IN = 2600 // screen starts here; the title fades out over the overlap
 const OUTRO_MS = 2600
 
-export function buildShowcase({ cursorPath, videoT0, durationMs, anchors, zoomRanges }) {
+export function buildShowcase({
+  cursorPath,
+  videoT0,
+  durationMs,
+  anchors,
+  zoomRanges,
+}) {
   const clicks = clicksFrom(cursorPath, videoT0)
-  if (clicks.length < 4) throw new Error(`showcase expects 4 clicks, got ${clicks.length}`)
+  if (clicks.length < 4)
+    throw new Error(`showcase expects 4 clicks, got ${clicks.length}`)
   /** video time -> timeline time */
   const T = (vt) => LEAD_IN + vt
   const [sync, deploy, services, incidents] = clicks.map((c) => T(c.t))
@@ -61,10 +64,34 @@ export function buildShowcase({ cursorPath, videoT0, durationMs, anchors, zoomRa
     },
 
     // --- chapter markers, one per beat -------------------------------------
-    { type: 'lower', startMs: sync - 800, endMs: sync + 2100, num: '1', text: 'Sync with origin' },
-    { type: 'lower', startMs: deploy - 800, endMs: deploy + 2600, num: '2', text: 'Queue a deploy' },
-    { type: 'lower', startMs: services - 800, endMs: services + 1900, num: '3', text: 'Browse services' },
-    { type: 'lower', startMs: incidents - 800, endMs: incidents + 2200, num: '4', text: 'Open incidents' },
+    {
+      type: 'lower',
+      startMs: sync - 800,
+      endMs: sync + 2100,
+      num: '1',
+      text: 'Sync with origin',
+    },
+    {
+      type: 'lower',
+      startMs: deploy - 800,
+      endMs: deploy + 2600,
+      num: '2',
+      text: 'Queue a deploy',
+    },
+    {
+      type: 'lower',
+      startMs: services - 800,
+      endMs: services + 1900,
+      num: '3',
+      text: 'Browse services',
+    },
+    {
+      type: 'lower',
+      startMs: incidents - 800,
+      endMs: incidents + 2200,
+      num: '4',
+      text: 'Open incidents',
+    },
 
     // --- beat 1: call out the metric the click actually changed ------------
     {
@@ -133,9 +160,12 @@ export function buildShowcase({ cursorPath, videoT0, durationMs, anchors, zoomRa
     ...autoCues({ clicks, zoomRanges, offsetMs: LEAD_IN }),
   ]
   for (const l of layers) {
-    if (l.type === 'toast') cues.push({ sound: 'pop', atMs: l.startMs, gain: 0.85 })
-    if (l.type === 'callout') cues.push({ sound: 'pop', atMs: l.startMs, gain: 0.4 })
-    if (l.type === 'outro') cues.push({ sound: 'chime', atMs: l.startMs + 260, gain: 0.9 })
+    if (l.type === 'toast')
+      cues.push({ sound: 'pop', atMs: l.startMs, gain: 0.85 })
+    if (l.type === 'callout')
+      cues.push({ sound: 'pop', atMs: l.startMs, gain: 0.4 })
+    if (l.type === 'outro')
+      cues.push({ sound: 'chime', atMs: l.startMs + 260, gain: 0.9 })
   }
 
   return { layers, audioCues: cues }

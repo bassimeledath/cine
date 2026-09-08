@@ -11,3 +11,7 @@ cursor.jsonl
 meta.json
 
 .DS_Store
+
+src/platform/macos/cursor-logger
+
+.cine-cache/

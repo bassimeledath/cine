@@ -1,128 +1,173 @@
-# cine
+# Cine
 
-Headless cinematic screen recorder. Records a demo and renders Screen Studio-style
-output — zoom-on-click with spring physics, smoothed oversized cursor, click
-ripples, gradient background, padding, rounded corners, shadow — with no GUI app
-and no human driving it.
+New projects use Kino’s camera policy and recorded keyboard/mouse samples. See [agent authoring](docs/agent-authoring.md) for controls and [sound provenance](assets/sounds/recorded/README.md) for sources.
 
-```bash
+Cine records scripted app workflows and renders cinematic MP4 demos: smooth camera motion, a clean cursor, click highlights, image backgrounds, titles, anchored callouts, and recorded input sounds.
+
+**macOS is the supported host initially. Web recording is headless. The bundled Electron demo stays hidden.** Neither workflow moves the physical mouse. Native desktop recording is an explicit `--native` opt-in and does control the desktop.
+
+## Agent-authored demos (v2)
+
+Newly authored projects support inserted or held scenes, editable JavaScript/HTML/React scene code, imported MP3/WAV/M4A narration, captions, animated typing with observed key events, independently directed camera shots, and user-selected covers. TTS stays outside Cine: any agent can provide ordinary audio files and optional timing sidecars.
+
+Read [the agent authoring guide](docs/agent-authoring.md) and [project schema](schemas/project-v2.schema.json). `capabilities`, `validate`, `inspect`, `project patch`, `scene init`, `scene eject`, and `preview` support a file-based agent workflow. Add `--json` for machine-readable stdout; progress goes to stderr. The project example later in this README documents the supported **legacy v1** format; `author` now writes v2 and `author --legacy` writes v1.
+
+Rendering v2 exports a selected cover, caption sidecars when present, and an artifact manifest beside the MP4. Audio-only edits can reuse `.cine-cache` picture data. Existing saved project documents remain untouched.
+
+## Start
+
+Requirements: Node 22+, Google Chrome, and FFmpeg with H.264 encoding/decoding. The native backend additionally needs `cliclick`, the compiled helper, and macOS Screen Recording / Accessibility permissions.
+
+```sh
 npm install
-npm run build:native      # only needed for the --native backend
-node bin/cine.mjs demo    # -> ~/Downloads/cine-demo.mp4
+node bin/cine.mjs doctor
+node bin/cine.mjs demo --work ~/Downloads/cine-web --out ~/Downloads/cine-web.mp4
+node bin/cine.mjs showcase --work ~/Downloads/cine-showcase --out ~/Downloads/cine-showcase.mp4
 ```
 
-## Pipeline
+`CINE_CHROME` and `CINE_FFMPEG` override executable discovery. `CINE_CLICLICK` overrides native input. Only native capture needs `npm run build:native`. An explicitly configured missing executable is an error, not a silent fallback.
 
-Four stages. Stage 1 has two interchangeable backends that emit identical
-artifacts (`raw.mp4` + `cursor.jsonl` + `meta.json`), so stages 2-4 are shared.
+## Capture, author, edit, render
 
-| Stage | Module | What it does |
-|---|---|---|
-| 1. Capture | `capture-web.mjs` / `capture.mjs` + `drive.mjs` | Produce raw footage + a cursor track |
-| 2. Author | `autozoom.mjs`, `showcase.mjs` | Derive zoom ranges from clicks; build the layer timeline |
-| 3. Render | `render.mjs` + `compositor.html` | Composite the cinematic cut in headless Chrome, encode with ffmpeg |
-| 4. Sound | `audio.mjs` | Synthesize and mix cues, mux without re-encoding video |
-
-## Overlays and sound
-
-The renderer takes an optional `layers` array — a title card, chapter markers,
-toasts, callouts, a corner badge, an outro. Layers are plain data, so retiming
-one is a JSON edit and a re-render, never a re-recording.
-
-```bash
-node bin/cine.mjs showcase                       # capture + overlay render
-node bin/cine.mjs showcase --work /tmp/cine-x    # re-render an existing capture
+```sh
+node bin/cine.mjs capture --url http://localhost:3000 \
+  --script actions.json --work ~/Downloads/my-capture
+node bin/cine.mjs author --capture ~/Downloads/my-capture/meta.json \
+  --project ~/Downloads/my-project.json
+node bin/cine.mjs render --project ~/Downloads/my-project.json \
+  --out ~/Downloads/my-demo.mp4 --inspect ~/Downloads/my-inspection
 ```
 
-Two things make the overlays worth having over a general-purpose video tool:
+Editing a project changes the export without replaying the app. **Render never writes the project.** `author` requires `--force` to overwrite an existing project. `showcase` creates an example project only if it does not exist; subsequent runs use the saved edits.
 
-- **They're welded to the UI.** `anchorSelectors` resolves elements to rects at
-  capture time and stores them in `meta.json`; the compositor pushes those rects
-  through the live camera transform, so a callout tracks its button as the
-  camera zooms and pans. For an element whose only child is text, the rect comes
-  from a `Range` rather than the box — a block-level `<div class="val">8</div>`
-  is as wide as its card, so its box centre lands in empty space.
-- **Sound writes itself.** `autoCues()` derives click ticks and camera whooshes
-  from the captured click track and the authored zoom ranges. Only the toasts
-  and the title bed are hand-placed.
+Capture produces:
 
-Overlays are DOM, not canvas draw calls: `page.screenshot()` captures the
-viewport, so a positioned `<div>` composites into the frame for free — web
-fonts, flexbox, `backdrop-filter`, SVG leader lines and all. Audio never enters
-the browser; it's mixed in Node and muxed with `-c:v copy`.
+- `raw.mp4`: source video without the composited cursor.
+- `cursor.jsonl`: ordered, source-relative samples `{t,x,y,l,r}`; milliseconds and logical display points.
+- `meta.json`: versioned manifest with duration, source paths, frame rate, display geometry, original clock origin, observed actions, and timestamped anchor rectangles.
 
-### Backends
+The original wall-clock origin is metadata only. New samples and action times use source time, where zero is the first video frame. Legacy manifests with absolute stamps are normalized on load without modifying their source files.
 
-**`capture-web.mjs` (default)** — fully headless. Runs the page in headless
-Chrome, drives it over CDP, and captures frames via `Page.screencast`. The
-cursor is *authored*, not observed: positions come from the same eased timeline
-the input events are dispatched from. No display, no cursor takeover, runs while
-you work. Web content only.
+Use `capture --cdp ENDPOINT` to attach to an existing Chromium/Electron host. If it has multiple pages, specify `--target` with an exact page URL. Cine disconnects from an attached host and never closes it. Recording requires an action producer; uncontrolled external mouse activity is not inferred into a cursor track.
 
-**`capture.mjs` + `drive.mjs` (`--native`)** — records the physical screen with
-`ffmpeg avfoundation` and moves the real macOS cursor with `cliclick`. Works for
-anything on screen (native apps, Terminal), but takes over the machine for the
-length of the recording and needs Screen Recording permission.
+## Action scripts
 
-```bash
-node bin/cine.mjs demo --url http://localhost:3000 --out ~/Downloads/my-demo.mp4
-node bin/cine.mjs demo --native          # physical screen capture
-node bin/cine.mjs autozoom --cursor cursor.jsonl --out cuts.json
-node bin/cine.mjs render --video raw.mp4 --cursor cursor.jsonl --cuts cuts.json \
-  --display-points 1470x956 --duration-ms 15700 --out out.mp4
+Scripts are JSON arrays. Each action resolves its target against the current page, checks visibility/hit-testing, and records dispatch timing. An action can wait for an expected result before the next action begins.
+
+```json
+[
+  {"type":"click","selector":"#open","expect":{"selector":"#form"}},
+  {"type":"type","selector":"#name","text":"September release"},
+  {"type":"click","selector":"#save","expect":{"selector":"#status","text":"Saved"}},
+  {"type":"scroll","y":500},
+  {"type":"waitFor","selector":"#publish"},
+  {"type":"click","selector":"#publish"},
+  {"type":"verify","selector":"#status","text":"Published"}
+]
 ```
 
-## Things that are load-bearing
+Supported actions: `move`, `click`, `type`, `key`, `scroll`, `waitFor`, `verify`, and `wait` (`ms`). `click` is the default type. Pacing controls are `moveMs`, `settleMs`, and `dwellMs`. `timeoutMs` controls target/condition waits. `waitFor` and `verify` accept `state: "visible" | "hidden"` and optional text. Typing animates text at the focused field; `typing.replace: true` clears it and `typing.mode: "instant"` inserts the full string. Explicit `key` actions support deletion and shortcuts in Chromium. Scroll x/y are pixel deltas. Explicit `point: {x,y}` is available for known coordinates.
 
-Each of these was a bug that produced silently wrong output, not a crash.
+`runActions()` also accepts an async iterable: a future live agent can submit actions through the same executor. No LLM planner or provider integration ships here. `startChromiumRecording()` records independently of the producer; integrations feed observed samples and action events to its `emit` / `onAction` hooks.
 
-- **Clock epochs.** The native cursor logger stamps `CLOCK_REALTIME`, matching
-  `Date.now()` in Node. It must not use `CLOCK_MONOTONIC`: macOS stops that
-  clock during sleep and libuv's `hrtime` does not, so the two epochs drift by
-  however long the machine has slept (~21s when measured). Mixing them threw
-  every zoom that far off its click.
-- **`videoT0` is anchored on the stop, not the start.** AVFoundation delivers
-  ~500ms of buffered frames before ffmpeg prints its first progress line, so
-  stamping the start runs late by a variable amount. `stop()` instead computes
-  `t0 = stopInstant - containerDuration`. Verified: cursor-log end and video
-  duration then agree to 8ms.
-- **Virtual time is unusable for frame stepping.** Chrome only expires a
-  virtual-time budget reliably at >=100ms granularity; at or below 50ms (i.e.
-  any real frame rate) the renderer wedges on the second frame, regardless of
-  input-dispatch order or `maxVirtualTimeTaskStarvationCount`. Hence the
-  realtime screencast approach.
-- **Merge tolerances are tuned for authored pacing.** kino's 2500ms click-merge
-  window assumes a human clicking in bursts; with deliberate ~2.2s dwells it
-  collapses an entire script into one shot framing the centroid of everything.
-  cine merges only rapid *and* spatially close clicks, then closes sub-1500ms
-  gaps so the camera pans between targets instead of blipping out and back in.
-- **The card is the video rect, not the padded rect.** Otherwise any source
-  whose aspect differs from the output gets pillarboxed and the card's black
-  fill shows down the sides.
-- **Cursor and click ripples counter-scale by zoom.** They're drawn inside the
-  zoom transform so they track the right pixel, but a pointer that grows with
-  the zoom reads as broken.
-- **Focus is in display points and converted late.** The camera focus comes out
-  of the cursor log in points; the card is measured in output pixels. Treating
-  them as one space mis-centres every zoom by the ratio between them — invisible
-  for a 1x web capture (3% off) and badly wrong for a 2x Electron one (23%).
-  Overlay anchoring made it obvious because the ring missed its target.
-- **Timeline time is not video time.** With a title card the screen layer starts
-  late and carries a `sourceOffsetMs`; total duration comes from the layer list,
-  not the capture. Everything camera-related runs on video time, overlays run on
-  timeline time.
+## Project format
 
-## Known limitations
+Paths, including image assets, are relative to the project file, not the shell working directory.
 
-- **Headless capture is 1x.** `Page.screencast` composites at CSS-pixel density
-  and ignores `deviceScaleFactor`, so the source is 1470x956 rather than
-  Retina. Slightly soft under zoom. The `--native` backend captures true 2x.
-- **Screencast is change-driven**, delivering ~18fps under motion. Fine here
-  because the page is mostly static and all camera motion is generated by the
-  compositor at full 30fps, but fast page-side animation would judder.
-- **`glideTo` in `drive.mjs` is slower than requested.** It packs ~54
-  `m:`/`w:` pairs into one `cliclick` call and per-command overhead stacks on
-  top of each wait, so a 650ms glide takes noticeably longer. Only affects
-  `--native`.
-- Homebrew's ffmpeg is often broken by x265 soname drift; `ffmpegPath()` prefers
-  the self-contained `imageio_ffmpeg` binary and falls back through candidates.
+```json
+{
+  "schemaVersion": 1,
+  "capture": "my-capture/meta.json",
+  "output": {"width": 1920, "height": 1080, "fps": 30},
+  "settings": {
+    "backgroundType": "image",
+    "backgroundImage": "assets/background.png",
+    "backgroundFit": "cover",
+    "backgroundPosition": {"x": 0.5, "y": 0.5},
+    "backgroundGradientFrom": "#102e3a",
+    "backgroundGradientTo": "#215650",
+    "brandColor": "#3ca58f",
+    "accentColor": "#f0bb87",
+    "textColor": "#ffffff",
+    "mutedColor": "#a6c9c1",
+    "fontFamily": "Arial, sans-serif",
+    "cursorType": "image",
+    "cursorImage": "assets/cursor.png",
+    "cursorHotspot": {"x": 0.0625, "y": 0.0455},
+    "cursorSize": 1.3
+  },
+  "screen": {
+    "startMs": 1800,
+    "segments": [
+      {"fromMs": 0, "toMs": 3000, "rate": 1},
+      {"fromMs": 3000, "toMs": 8000, "rate": 2.5},
+      {"fromMs": 9000, "toMs": 12000, "rate": 1}
+    ]
+  },
+  "zoomRanges": [{"start": 1000, "end": 3000, "zoom": 1.5, "fx": 400, "fy": 300}],
+  "layers": [
+    {"type":"title","head":"September release","startMs":0,"endMs":2000},
+    {"type":"callout","text":"Saved","anchorSelector":"#save","timebase":"source","startMs":3200,"endMs":4400},
+    {"type":"outro","head":"Ready to share","timebase":"screenEnd","startMs":-200,"endMs":1800}
+  ],
+  "audioCues": [{"sound":"tick","atMs":3400,"timebase":"source"}]
+}
+```
+
+The example segment bounds must fit the actual capture. Omitting segments retains the whole capture at 1×. Segments must be ordered and non-overlapping, with rates in `(0,16]`. Gaps in source bounds trim footage; output segments join contiguously. Reordering, reverse playback, and continuous speed ramps are not supported.
+
+Time rules:
+
+- Zoom ranges and captured anchors use source time/coordinates.
+- Layers and audio default to output time. `timebase: "source"` follows clip edits and speed. Source layers can split across trims; cues in trimmed portions disappear.
+- `timebase: "screenEnd"` uses offsets from the edited screen's end, useful for outros.
+- Output layers may use `endAt: "screenEnd"` and `endOffsetMs` to follow the screen's duration.
+- Camera/cursor springs run on output time. Speed changes accelerate footage and action positions while preserving the smoothing cadence.
+- Click ripples and sound samples retain their normal output-time duration. Cue positions move with the edit; their pitch does not change.
+- Frame state is compiled once at output FPS. `window.step(t)` selects the corresponding frame; direct and backward seeking are independent of prior calls.
+
+Layers: `title`, `outro`, `lower` (chapter marker), `toast`, `callout`, and `badge`. Anchor selectors must have been included in capture's `anchorSelectors`; moving/hidden anchors are sampled during capture. Static `anchor: {x,y,w,h}` rectangles are also supported. Tracking is sampled at roughly 10 Hz, not per-pixel optical tracking.
+
+Background types: `gradient`, `solid`, `image`; images support `cover`/`contain` with a normalized position. PNG, JPEG, WebP, and SVG assets are loaded before export; malformed/missing files fail clearly. `contain` uses the first background color behind uncovered areas. Title/outro cards use the theme gradient so text remains legible. Cursor types: `arrow`, `dot`, `crosshair`, `image`. Hotspots are normalized image coordinates: `(0,0)` is the top-left, `(0.5,0.5)` is the center. Transparent images are supported. Cursor size is independent of camera zoom.
+
+## Architecture and platform boundary
+
+- `src/platform/macos/`: Apple capture APIs, cursor helper, physical input, macOS executable candidates.
+- `src/runtime/host.mjs`: composition root; selects the supported host and passes resolved tool paths to engines.
+- `src/runtime/`: subprocess ownership and hidden Electron launch on an ephemeral debugging port.
+- `src/capture/`: Chromium recorder and common artifact IO.
+- `src/actions/`: action runner and Chromium driver.
+- `src/core/`: platform-independent time, project, style, event, and frame-state logic.
+- `src/render/`: browser compositor, canvas drawing, DOM overlays, asset loading, export.
+- `src/media/`: FFmpeg helpers, recorded sound samples, legacy synth cues, and narration mixing.
+- `src/examples/`: demo scripts and showcase template; `demo/` contains the sample applications.
+
+Core/render/media do not import platform adapters or host discovery. Export/capture engines receive a runtime `{chrome,ffmpeg}`. Native code is imported only for `--native`; a headless workflow does not need native permissions or helpers. A dependency test enforces this boundary.
+
+Future OS support requires a host resolver, capture/input adapter as needed, packaging, and real platform validation. It does not require changing branding, project documents, time mapping, or composition. The current CLI deliberately reports macOS-only support; a portable internal design is not a claim of tested Windows/Linux support.
+
+## Validation
+
+```sh
+npm test
+npm run test:integration
+```
+
+Unit tests cover timing, capture/project contracts, dispatch timing, dynamic producers, settings, deterministic audio, platform dependencies, and subprocess failure cleanup. Integration tests use headless Chrome, hidden Electron, and FFmpeg for pixel comparisons, custom React/module scenes, narration/holds/captions, typing, cover selection, cache reuse, previews, and failure cleanup. They never move the physical mouse.
+
+The `tests/fixtures/dynamic.html` workflow exercises a newly-created target, a target moved by a prior action, typing, scrolling, and outcome verification. `--inspect DIR` saves a frame per second plus the endpoints during an export.
+
+## Native recording and practical limits
+
+```sh
+npm run build:native
+node bin/cine.mjs demo --native --work ~/Downloads/cine-native --out ~/Downloads/cine-native.mp4
+```
+
+Native recording is foreground, main-display recording. It records the real screen and controls the real cursor. Do not use it while working in other applications. It cannot be made headless while recording the physical display. The default headless/hidden modes should be used for unattended demos.
+
+Native input uses Accessibility permission and screen capture uses Screen Recording permission. The helper reports primary-display logical geometry; cursor coordinates are normalized to the capture origin. Multi-monitor selection and arbitrary native app targeting are not implemented. Native clocks are anchored at stop time minus recorded video duration; hardware timing accuracy still needs measurement on the target host.
+
+Chromium screencast is change-driven. The encoder holds the last received frame between repaints. Camera/cursor rendering is smooth at output FPS, but this does not restore missing frames from fast source animations. Capture is at CSS-pixel density; zoomed source footage can look soft. Electron capture includes its WebContents, not native menus or system dialogs. Original application audio is not recorded; generated cues and imported audio clips compose the audio track.
+
+Images/fonts and installed Chrome/FFmpeg versions affect visual reproducibility. Use the same environment for strict comparisons. Exports currently spool frames to temporary storage; scratch is removed on failure as well as success, while capture artifacts remain available for editing.

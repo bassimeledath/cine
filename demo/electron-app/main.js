@@ -8,10 +8,12 @@ app.commandLine.appendSwitch('remote-debugging-port', process.env.CINE_CDP_PORT 
 app.commandLine.appendSwitch('remote-allow-origins', '*')
 
 app.whenReady().then(() => {
+  // Demo capture uses CDP and does not need a foreground desktop window.
+  if (process.env.CINE_SHOW_DEMO !== '1') app.dock?.hide()
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
-    show: true,
+    show: process.env.CINE_SHOW_DEMO === '1',
     backgroundColor: '#0b1220',
     titleBarStyle: 'hiddenInset',
     webPreferences: { backgroundThrottling: false },

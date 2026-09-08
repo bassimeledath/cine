@@ -1,19 +1,15 @@
+import { recordedSound, RECORDED_SOUND_NAMES } from './recorded-sounds.mjs'
 // Stage 4 — the audio track.
 //
 // Audio never touches the canvas. The compositor renders silent frames; this
 // module mixes a stereo bed in Node and muxes it in at the end. That split is
-// deliberate: it keeps `step(t)` a pure function of time (so frames stay
-// re-renderable in any order) and it means adding sound costs nothing in
-// render time.
+// deliberate: sound does not affect frame evaluation, and changing cues
+// requires only mixing and muxing after the picture is rendered.
 //
-// Sounds are synthesized rather than shipped as files. A screen-recorder's
-// sound design is four or five short UI noises; generating them keeps the
-// package dependency-free and makes every cue tweakable by number rather than
-// by finding a new sample.
+// Legacy synth cues remain reproducible; recorded input samples are packaged locally.
 
-import { execFileSync } from 'node:child_process'
+import { runProcess } from '../runtime/process.mjs'
 import { writeFileSync } from 'node:fs'
-import { ffmpegPath } from './capture.mjs'
 
 const SR = 48000
 
@@ -73,7 +69,8 @@ function tick() {
   const lp = lowpass(0.42)
   return synth(0.05, (t) => {
     const e = env(t, 0.05, { attack: 0.0008, curve: 9 })
-    const body = lp(hp(noise())) * 0.85 + Math.sin(2 * Math.PI * 2100 * t) * 0.25
+    const body =
+      lp(hp(noise())) * 0.85 + Math.sin(2 * Math.PI * 2100 * t) * 0.25
     const v = body * e * 0.8
     return [v, v]
   })
@@ -85,7 +82,11 @@ function pop() {
   return synth(0.26, (t) => {
     const f = 520 * Math.pow(900 / 520, clamp01(t / 0.09))
     const e = env(t, 0.26, { attack: 0.008, curve: 5 })
-    const v = (Math.sin(2 * Math.PI * f * t) * 0.7 + Math.sin(2 * Math.PI * f * 2 * t) * 0.18) * e * 0.5
+    const v =
+      (Math.sin(2 * Math.PI * f * t) * 0.7 +
+        Math.sin(2 * Math.PI * f * 2 * t) * 0.18) *
+      e *
+      0.5
     return [v, v * 0.96]
   })
 }
@@ -103,10 +104,10 @@ function whoosh(dir = 1) {
     // Bell-shaped amplitude: fades in, peaks mid-move, fades out.
     const e = Math.sin(Math.PI * clamp01(p)) ** 1.6
     // Sweep the cutoff up for a zoom-in, down for a zoom-out.
-    const k = dir > 0 ? 0.02 + 0.20 * p : 0.22 - 0.20 * p
+    const k = dir > 0 ? 0.02 + 0.2 * p : 0.22 - 0.2 * p
     lpL += k * (nL() - lpL)
     lpR += k * (nR() - lpR)
-    return [lpL * e * 0.30, lpR * e * 0.30]
+    return [lpL * e * 0.3, lpR * e * 0.3]
   })
 }
 
@@ -134,11 +135,39 @@ function pad(durSec = 3.2) {
       Math.sin(2 * Math.PI * 110.6 * t) * 0.5 +
       Math.sin(2 * Math.PI * 165.4 * t) * 0.3 +
       Math.sin(2 * Math.PI * 219.6 * t) * 0.2
-    return [l * swell * 0.10, r * swell * 0.10]
+    return [l * swell * 0.1, r * swell * 0.1]
+  })
+}
+
+function softClick(frequency = 620, seed = 42) {
+  const noise = makeNoise(seed),
+    lp = lowpass(0.12)
+  return synth(0.065, (t) => {
+    const e = env(t, 0.065, { attack: 0.0015, curve: 6 }),
+      v =
+        (lp(noise()) * 0.5 + Math.sin(2 * Math.PI * frequency * t) * 0.3) *
+        e *
+        0.35
+    return [v, v]
+  })
+}
+function softWhoosh() {
+  const noise = makeNoise(31),
+    lp = lowpass(0.035)
+  return synth(0.26, (t) => {
+    const v = lp(noise()) * Math.sin((Math.PI * t) / 0.26) ** 2 * 0.12
+    return [v, v]
   })
 }
 
 export const SOUNDS = {
+  ...Object.fromEntries(
+    RECORDED_SOUND_NAMES.map((name) => [name, () => recordedSound(name)]),
+  ),
+  softClick,
+  keyTap: () => softClick(420, 81),
+  keyDelete: () => softClick(320, 91),
+  softWhoosh,
   tick,
   pop,
   whoosh: () => whoosh(1),
@@ -201,20 +230,42 @@ export function writeWav(path, [L, R]) {
   buf.write('data', 36)
   buf.writeUInt32LE(bytes, 40)
   for (let i = 0; i < n; i++) {
-    buf.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(L[i] * 32767))), 44 + i * 4)
-    buf.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(R[i] * 32767))), 46 + i * 4)
+    buf.writeInt16LE(
+      Math.max(-32768, Math.min(32767, Math.round(L[i] * 32767))),
+      44 + i * 4,
+    )
+    buf.writeInt16LE(
+      Math.max(-32768, Math.min(32767, Math.round(R[i] * 32767))),
+      46 + i * 4,
+    )
   }
   writeFileSync(path, buf)
   return path
 }
 
 /** Mux a wav onto a rendered mp4 without re-encoding the video. */
-export function muxAudio(videoPath, wavPath, outPath) {
-  execFileSync(
-    ffmpegPath(),
-    ['-y', '-i', videoPath, '-i', wavPath,
-      '-map', '0:v:0', '-map', '1:a:0',
-      '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest', outPath],
+export async function muxAudio(videoPath, wavPath, outPath, ffmpeg) {
+  await runProcess(
+    ffmpeg,
+    [
+      '-y',
+      '-i',
+      videoPath,
+      '-i',
+      wavPath,
+      '-map',
+      '0:v:0',
+      '-map',
+      '1:a:0',
+      '-c:v',
+      'copy',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '192k',
+      '-shortest',
+      outPath,
+    ],
     { stdio: 'pipe' },
   )
   return outPath
@@ -229,7 +280,8 @@ export function muxAudio(videoPath, wavPath, outPath) {
  */
 export function autoCues({ clicks = [], zoomRanges = [], offsetMs = 0 }) {
   const cues = []
-  for (const c of clicks) cues.push({ sound: 'tick', atMs: c.t + offsetMs, gain: 0.9 })
+  for (const c of clicks)
+    cues.push({ sound: 'tick', atMs: c.t + offsetMs, gain: 0.9 })
   for (const r of zoomRanges) {
     cues.push({ sound: 'whoosh', atMs: r.start + offsetMs - 60, gain: 0.8 })
     cues.push({ sound: 'whooshOut', atMs: r.end + offsetMs - 120, gain: 0.55 })

@@ -17,8 +17,12 @@ export function stepSpring(s, tx, ty, preset, dtMs) {
   const n = Math.max(1, Math.round(dtMs))
   const dt = dtMs / n / 1000
   for (let i = 0; i < n; i++) {
-    s.vx += (preset.stiffness * (tx - s.x) - preset.damping * s.vx) / preset.mass * dt
-    s.vy += (preset.stiffness * (ty - s.y) - preset.damping * s.vy) / preset.mass * dt
+    s.vx +=
+      ((preset.stiffness * (tx - s.x) - preset.damping * s.vx) / preset.mass) *
+      dt
+    s.vy +=
+      ((preset.stiffness * (ty - s.y) - preset.damping * s.vy) / preset.mass) *
+      dt
     s.x += s.vx * dt
     s.y += s.vy * dt
   }
@@ -28,12 +32,17 @@ export function makeScalar(v = 1) {
   return { x: v, vx: 0 }
 }
 
-export function stepScalar(s, target, { stiffness = 1200, damping = 34, mass = 1 }, dtMs) {
+export function stepScalar(
+  s,
+  target,
+  { stiffness = 1200, damping = 34, mass = 1 },
+  dtMs,
+) {
   if (dtMs <= 0) return
   const n = Math.max(1, Math.round(dtMs))
   const dt = dtMs / n / 1000
   for (let i = 0; i < n; i++) {
-    s.vx += (stiffness * (target - s.x) - damping * s.vx) / mass * dt
+    s.vx += ((stiffness * (target - s.x) - damping * s.vx) / mass) * dt
     s.x += s.vx * dt
   }
 }

@@ -3,6 +3,10 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <time.h>
+#include <string.h>
+#include <signal.h>
+static volatile sig_atomic_t running = 1;
+static void stop(int signal) { running = 0; }
 
 // Wall clock (ms since the Unix epoch), deliberately NOT CLOCK_MONOTONIC.
 // The renderer aligns these stamps against timestamps taken in Node, and macOS
@@ -17,6 +21,17 @@ static double now_ms(void) {
 }
 
 int main(int argc, char **argv) {
+    if (argc > 1 && strcmp(argv[1], "--display") == 0) {
+        CGDirectDisplayID display = CGMainDisplayID();
+        CGRect b = CGDisplayBounds(display);
+        printf("{\"x\":%.0f,\"y\":%.0f,\"w\":%.0f,\"h\":%.0f,\"pixelWidth\":%zu,\"pixelHeight\":%zu}\n", b.origin.x,b.origin.y,b.size.width,b.size.height,CGDisplayPixelsWide(display),CGDisplayPixelsHigh(display));
+        return 0;
+    }
+    if (argc == 4 && strcmp(argv[1], "--scroll") == 0) {
+        CGEventRef event = CGEventCreateScrollWheelEvent(NULL,kCGScrollEventUnitPixel,2,atoi(argv[3]),atoi(argv[2]));
+        CGEventPost(kCGHIDEventTap,event); CFRelease(event); return 0;
+    }
+    signal(SIGTERM,stop);signal(SIGINT,stop);
     int hz = argc > 1 ? atoi(argv[1]) : 250;
     if (hz < 30) hz = 30;
     useconds_t us = 1000000 / hz;
@@ -24,7 +39,7 @@ int main(int argc, char **argv) {
     fprintf(stderr, "cursor-logger: %d Hz\n", hz);
     int prevL = -1, prevR = -1;
     double lastFlush = now_ms();
-    while (1) {
+    while (running) {
         // CGEventCreate returns a +1 retained ref — must release it, or a
         // 250Hz loop leaks thousands of events over a single recording.
         CGEventRef ev = CGEventCreate(NULL);

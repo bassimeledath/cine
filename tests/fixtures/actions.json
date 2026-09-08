@@ -1,0 +1,9 @@
+[
+  {"type":"click","selector":"#open","moveMs":450,"dwellMs":500,"expect":{"selector":"#save"}},
+  {"type":"type","selector":"#name","text":"A clearer view","moveMs":400,"dwellMs":700},
+  {"type":"click","selector":"#save","moveMs":450,"dwellMs":800,"expect":{"selector":"#status","text":"Saved: A clearer view"}},
+  {"type":"click","selector":"#save","moveMs":450,"dwellMs":700},
+  {"type":"scroll","y":640,"dwellMs":600},
+  {"type":"click","selector":"#finish","moveMs":450,"dwellMs":800,"expect":{"selector":"#done","text":"Published to the team"}},
+  {"type":"verify","selector":"#done","text":"Published to the team","dwellMs":300}
+]

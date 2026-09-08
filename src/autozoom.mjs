@@ -1,17 +1,10 @@
 // Port of kino's engine/auto-zoom.ts range builder.
 // 1. per click -> raw range [click-300ms, click+2500ms]
-// 2. merge overlapping ranges (gap tolerance 2500ms)
+// 2. merge nearby clicks with 200ms gap tolerance; bridge short gaps between shots
 // 3. enforce minimum duration 1000ms
 
-export function findClicks(frames) {
-  const clicks = []
-  let prev = false
-  for (const f of frames) {
-    if (f.l && !prev) clicks.push({ t: f.t, x: f.x, y: f.y })
-    prev = !!f.l
-  }
-  return clicks
-}
+import { findClicks } from './core/events.mjs'
+export { findClicks } from './core/events.mjs'
 
 export function buildZoomRanges(frames, opts = {}) {
   const {
@@ -37,12 +30,19 @@ export function buildZoomRanges(frames, opts = {}) {
   } = opts
   const clicks = findClicks(frames)
   if (!clicks.length) return []
-  const raw = clicks.map((c) => ({ start: c.t - padBeforeMs, end: c.t + padAfterMs, clicks: [c] }))
+  const raw = clicks.map((c) => ({
+    start: c.t - padBeforeMs,
+    end: c.t + padAfterMs,
+    clicks: [c],
+  }))
   const merged = []
   for (const r of raw) {
     const last = merged[merged.length - 1]
     const prev = last?.clicks[last.clicks.length - 1]
-    const near = prev && Math.hypot(r.clicks[0].x - prev.x, r.clicks[0].y - prev.y) <= mergeMaxDistPx
+    const near =
+      prev &&
+      Math.hypot(r.clicks[0].x - prev.x, r.clicks[0].y - prev.y) <=
+        mergeMaxDistPx
     if (last && near && r.start <= last.end + mergeGapMs) {
       last.end = Math.max(last.end, r.end)
       last.clicks.push(...r.clicks)

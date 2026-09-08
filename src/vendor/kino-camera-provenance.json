@@ -1,0 +1,18 @@
+{
+  "sourceRepository": "kino",
+  "files": [
+    {
+      "file": "src/renderer/engine/auto-zoom.ts",
+      "sha256": "45973391665ce2866df8cb640ff092a19031ade002a0064085cdf02c6ac9f010"
+    },
+    {
+      "file": "src/renderer/engine/spring-camera.ts",
+      "sha256": "99a1abaf86447b5750d70f41f5e96d7a20c491b9312e6e162c78d107b61aeaf9"
+    },
+    {
+      "file": "src/renderer/engine/composition-geometry.ts",
+      "sha256": "0c5cf50aae4faeb9911ccd3b5f37b928a661b931d7a72bc47bbc5c67550e4b43"
+    }
+  ],
+  "adaptation": "TypeScript erased and selected exports bundled; algorithm body unchanged. IDs replaced with stable IDs by Cine adapter."
+}
