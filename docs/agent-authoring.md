@@ -25,6 +25,20 @@ Give actions stable IDs in the script. Auto-generated IDs are saved in the captu
 
 Typing is animated by default. `typing.mode: "instant"` inserts a whole string. Pacing options are `cps`, `variation`, `punctuationMs`, and `seed`. Complex Unicode graphemes use the browser's insertion path; event metadata identifies it. `type: "key", key: "Backspace"` or a chord such as `key: "Control+A"` / `key: "Meta+A"` sends an explicit key. Text input appends unless `replace: true`. Native physical input currently does not implement replace/key combinations; use the headless Chromium driver for those actions.
 
+Select visible article text with a real browser drag:
+
+```json
+{"id":"highlight-idea","type":"selectText","selector":"article p","text":"A sentence to highlight.","dragMs":1100,"dwellMs":2000}
+```
+
+The text must exactly match DOM text within the selector (including inline elements); the first match is selected. Cine scrolls the element into view, checks both endpoints, drags with the mouse held down, and verifies the browser selection before recording a `verified` milestone. This supports visible left-to-right prose; split long passages into shorter selections that fit on screen. Avoid starting on links or draggable elements, which browsers may drag instead of selecting. Native capture does not support this action.
+
+Wheel actions scroll smoothly by default over 900 ms with eased acceleration and deceleration. Set `scrollMs` to change the gesture duration; `scrollMs: 0` explicitly requests an instant wheel event. Distances remain pixel deltas, including negative values. An optional `selector` or `point` moves the cursor over a particular scroll area first, preserving the browser's normal wheel handling. Target lookup scrolls offscreen elements smoothly into view and waits for layout to settle; visible targets are not recentered. Browser keyboard shortcuts retain their normal behavior, so use a negative scroll delta for a smooth return toward the top.
+
+```json
+{"id":"read-more","type":"scroll","y":480,"scrollMs":1000,"dwellMs":1800}
+```
+
 ## Scenes and time
 
 A v2 sequence contains `source` footage, `hold` frames, and generated `scene` entries. Each needs a stable ID. Source times are milliseconds inside the original capture. Output times include inserted scenes and footage speed changes.

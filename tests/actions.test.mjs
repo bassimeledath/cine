@@ -112,3 +112,17 @@ test('shortcut dispatch releases held modifiers after an invalid key', async () 
     'up:Control',
   ])
 })
+
+test('selection releases the mouse when dragging fails and does not claim verification', async () => {
+  let released = false, moves = 0, verified = false
+  const driver = {
+    resolveSelection: async () => ({start:{x:1,y:1},end:{x:20,y:20}}),
+    move: async () => { if (++moves > 1) throw new Error('drag interrupted') },
+    down: async () => {},
+    up: async () => {released = true},
+    verifySelection: async () => {verified = true},
+  }
+  await assert.rejects(runActions([{type:'selectText',selector:'p',text:'sample',moveMs:0,settleMs:0,dragMs:0}],driver,{leadInMs:0,tailMs:0}), /drag interrupted/)
+  assert.equal(released,true)
+  assert.equal(verified,false)
+})

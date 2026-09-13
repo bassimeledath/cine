@@ -23,6 +23,8 @@ export const CAPABILITIES = {
   schemaVersions: [1, 2],
   supportedOS: ['darwin'],
   capture: ['headless-chromium', 'hidden-electron', 'native-macos-opt-in'],
+  actions: ['click', 'move', 'type', 'key', 'scroll', 'wait', 'waitFor', 'verify', 'selectText'],
+  captureDefault: 'headless-chromium',
   scenes: ['source', 'hold', 'scene'],
   sceneCode: ['module', 'html', 'react-tsx'],
   templates: Object.keys(TEMPLATES),

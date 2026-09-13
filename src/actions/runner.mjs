@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { sleep } from '../runtime/process.mjs'
 import { ease } from '../core/events.mjs'
+import { scrollGesture } from './scroll.mjs'
 
 /** The producer can be an array or an async iterable supplied by a live agent. */
 export async function runActions(
@@ -60,10 +61,11 @@ export async function runActions(
         'verify',
         'wait',
         'key',
+        'selectText',
       ].includes(action.type)
     )
       throw new Error(`Unsupported action: ${action.type}`)
-    for (const key of ['moveMs', 'settleMs', 'dwellMs', 'ms']) {
+    for (const key of ['moveMs', 'settleMs', 'dwellMs', 'ms', 'dragMs', 'scrollMs']) {
       if (
         action[key] !== undefined &&
         (!Number.isFinite(action[key]) || action[key] < 0)
@@ -128,6 +130,36 @@ export async function runActions(
           })
         }
       }
+    } else if (action.type === 'selectText') {
+      if (
+        typeof action.selector !== 'string' || !action.selector ||
+        typeof action.text !== 'string' || !action.text ||
+        !driver.resolveSelection || !driver.verifySelection
+      )
+        throw new Error(
+          'selectText requires selector, nonempty text, and a supported browser driver',
+        )
+      const selection = await driver.resolveSelection(
+        action.selector, action.text, action.timeoutMs,
+      )
+      await move(selection.start, action.moveMs ?? 650)
+      await sleep(action.settleMs ?? 180)
+      milestones.dispatched = Date.now()
+      left = 1
+      try {
+        await driver.down(cursor)
+        sample()
+        await move(selection.end, action.dragMs ?? 1100)
+      } finally {
+        try {
+          await driver.up(cursor)
+        } finally {
+          left = 0
+          sample()
+        }
+      }
+      await driver.verifySelection(action.text)
+      milestones.verified = Date.now()
     } else if (action.type === 'key') {
       if (typeof action.key !== 'string' || !action.key || !driver.key)
         throw new Error('key requires a supported key combination')
@@ -143,8 +175,16 @@ export async function runActions(
             : 'key',
       })
     } else if (action.type === 'scroll') {
+      if (action.selector || action.point) {
+        const target = action.point ?? await driver.resolve(action.selector, action.timeoutMs)
+        await move(target, action.moveMs ?? 650)
+      }
       milestones.dispatched = Date.now()
-      await driver.scroll({ x: action.x ?? 0, y: action.y ?? 0 }, cursor)
+      await scrollGesture(
+        { x: action.x ?? 0, y: action.y ?? 0 },
+        (delta) => driver.scroll(delta, cursor),
+        { durationMs: action.scrollMs ?? 900, onStep: sample },
+      )
     } else if (action.type === 'wait') {
       await sleep(action.ms ?? 0)
     } else {

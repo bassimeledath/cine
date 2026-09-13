@@ -1,20 +1,16 @@
 import { typeText } from './typing.mjs'
+import { revealTarget } from './scroll.mjs'
 /** DOM resolution is done at execution time, never frozen for the whole script. */
 export async function pointOf(
   page,
   selector,
   { textBounds = false, scroll = false } = {},
 ) {
+  if (scroll) await revealTarget(page, selector)
   return page.evaluate(
-    (sel, useText, shouldScroll) => {
+    (sel, useText) => {
       const el = document.querySelector(sel)
       if (!el) return null
-      if (shouldScroll)
-        el.scrollIntoView({
-          block: 'center',
-          inline: 'center',
-          behavior: 'instant',
-        })
       let r = el.getBoundingClientRect()
       if (
         useText &&
@@ -37,7 +33,6 @@ export async function pointOf(
     },
     selector,
     textBounds,
-    scroll,
   )
 }
 
@@ -76,12 +71,54 @@ export async function pressKeyChord(keyboard, key) {
 }
 
 export function chromiumDriver(page, client) {
+  let buttons = 0
   return {
+    async resolveSelection(selector, text, timeout = 5000) {
+      await revealTarget(page, selector, timeout)
+      return page.evaluate((sel, text) => {
+        const el = document.querySelector(sel)
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+        const nodes = []
+        let node, content = ''
+        while ((node = walker.nextNode())) {
+          nodes.push({ node, start: content.length })
+          content += node.textContent
+        }
+        const index = content.indexOf(text)
+        if (index < 0) throw new Error('Selection text not found in ' + sel)
+        const rectAt = (offset) => {
+          const item = nodes.find(
+            ({ node, start }) => offset >= start && offset < start + node.length,
+          )
+          const range = document.createRange()
+          range.setStart(item.node, offset - item.start)
+          range.setEnd(item.node, offset - item.start + 1)
+          return range.getBoundingClientRect()
+        }
+        const first = rectAt(index),
+          last = rectAt(index + text.length - 1)
+        const start = { x: first.left + 0.1, y: first.top + first.height / 2 }
+        const end = { x: last.right - 0.1, y: last.top + last.height / 2 }
+        for (const p of [start, end]) {
+          const hit = document.elementFromPoint(p.x, p.y)
+          if (!hit || !(hit === el || el.contains(hit)))
+            throw new Error('Selection endpoints must be visible and unobstructed')
+        }
+        return { start, end }
+      }, selector, text)
+    },
+    async verifySelection(text) {
+      const selected = await page.evaluate(() => getSelection().toString())
+      if (selected !== text)
+        throw new Error(
+          `Selection mismatch: expected ${JSON.stringify(text)}, received ${JSON.stringify(selected)}`,
+        )
+    },
     async resolve(selector, timeout = 5000) {
       if (typeof selector !== 'string' || !selector)
         throw new Error('An action needs a selector or point')
-      await page.waitForSelector(selector, { visible: true, timeout })
-      const point = await pointOf(page, selector, { scroll: true })
+      await revealTarget(page, selector, timeout)
+      const point = await pointOf(page, selector)
       if (!point) throw new Error(`Target is not visible: ${selector}`)
       const usable = await page.evaluate(
         (sel, p) => {
@@ -98,25 +135,33 @@ export function chromiumDriver(page, client) {
     move: (p) =>
       client.send('Input.dispatchMouseEvent', {
         type: 'mouseMoved',
+        button: buttons ? 'left' : 'none',
+        buttons,
         x: p.x,
         y: p.y,
       }),
-    down: (p) =>
-      client.send('Input.dispatchMouseEvent', {
+    down: (p) => {
+      buttons = 1
+      return client.send('Input.dispatchMouseEvent', {
         type: 'mousePressed',
         x: p.x,
         y: p.y,
         button: 'left',
         clickCount: 1,
-      }),
-    up: (p) =>
-      client.send('Input.dispatchMouseEvent', {
+        buttons,
+      })
+    },
+    up: (p) => {
+      buttons = 0
+      return client.send('Input.dispatchMouseEvent', {
         type: 'mouseReleased',
         x: p.x,
         y: p.y,
         button: 'left',
         clickCount: 1,
-      }),
+        buttons,
+      })
+    },
     type: (text, options) =>
       typeText(
         text,
