@@ -9,48 +9,28 @@ import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import puppeteer from 'puppeteer-core'
 import { runActions } from '../actions/runner.mjs'
+import { installVirtualMicrophone } from './microphone.mjs'
+import { withTarget } from '../actions/targets.mjs'
 import { chromiumDriver } from '../actions/chromium.mjs'
 import { sleep } from '../runtime/process.mjs'
 import { encodeFrames } from '../media/ffmpeg.mjs'
 import { saveCapture } from './artifacts.mjs'
 
 async function readAnchors(page, selectors) {
-  return page.evaluate(
-    (selectors) =>
-      Object.fromEntries(
-        selectors.map((selector) => {
-          const el = document.querySelector(selector)
-          if (!el) return [selector, null]
-          let r = el.getBoundingClientRect()
-          if (el.childNodes.length === 1 && el.firstChild.nodeType === 3) {
-            const range = document.createRange()
-            range.selectNodeContents(el)
-            const text = range.getBoundingClientRect()
-            if (text.width && text.height) r = text
-          }
-          const visible =
-            r.width &&
-            r.height &&
-            r.bottom > 0 &&
-            r.top < innerHeight &&
-            r.right > 0 &&
-            r.left < innerWidth &&
-            getComputedStyle(el).visibility !== 'hidden'
-          return [
-            selector,
-            visible
-              ? {
-                  x: r.x + r.width / 2,
-                  y: r.y + r.height / 2,
-                  w: r.width,
-                  h: r.height,
-                }
-              : null,
-          ]
-        }),
-      ),
-    selectors,
-  )
+  return Object.fromEntries(await Promise.all(selectors.map(async selector => [selector,
+    await withTarget(page, selector, el => {
+      let r = el.getBoundingClientRect()
+      if (el.childNodes.length === 1 && el.firstChild.nodeType === 3) {
+        const range = document.createRange()
+        range.selectNodeContents(el)
+        const text = range.getBoundingClientRect()
+        if (text.width && text.height) r = text
+      }
+      return r.width && r.height && r.bottom > 0 && r.top < innerHeight &&
+        r.right > 0 && r.left < innerWidth && getComputedStyle(el).visibility !== 'hidden'
+        ? { x:r.x+r.width/2, y:r.y+r.height/2, w:r.width, h:r.height } : null
+    }),
+  ])))
 }
 
 /** Recording session is independent of the action producer and executor. */
@@ -205,6 +185,7 @@ export async function captureChromium({
   targetUrl,
   beats,
   actions = beats,
+  microphone = Array.isArray(actions) && actions.some(a => a.type === 'audioInput'),
   videoPath,
   cursorPath,
   displayPoints = { w: 1470, h: 956 },
@@ -218,7 +199,9 @@ export async function captureChromium({
     throw new Error('Capture requires runtime executable paths')
   if (!Number.isFinite(fps) || fps < 1 || fps > 120)
     throw new Error('Invalid capture fps')
-  let browser, recording
+  if (microphone && connectTo)
+    throw new Error('Virtual microphone requires a fresh headless capture; it cannot attach to an existing browser')
+  let browser, recording, input
   try {
     browser = connectTo
       ? await puppeteer.connect({
@@ -231,7 +214,8 @@ export async function captureChromium({
       : await puppeteer.launch({
           executablePath: runtime.chrome,
           headless: true,
-          protocolTimeout: 15000,
+          protocolTimeout: 120000,
+          args: ['--mute-audio', ...(microphone ? ['--autoplay-policy=no-user-gesture-required', '--use-fake-device-for-media-stream'] : [])],
         })
     let page
     if (connectTo) {
@@ -257,6 +241,7 @@ export async function captureChromium({
         height: displayPoints.h,
         deviceScaleFactor: 1,
       })
+      if (microphone) input = await installVirtualMicrophone(page)
       await page.goto(url, { waitUntil: 'networkidle0' })
     }
     recording = await startChromiumRecording(page, {
@@ -267,7 +252,7 @@ export async function captureChromium({
       displayPoints,
       anchorSelectors,
     })
-    await runActions(actions, chromiumDriver(page, recording.client), {
+    await runActions(actions, chromiumDriver(page, recording.client, { microphone: input }), {
       start: { x: displayPoints.w / 2, y: displayPoints.h * 0.72 },
       emit: recording.emit,
       onAction: recording.onAction,
@@ -282,6 +267,7 @@ export async function captureChromium({
     try {
       if (recording) await recording.abort()
     } finally {
+      if (input) await input.dispose().catch(() => {})
       if (browser) {
         if (connectTo) browser.disconnect()
         else await browser.close()

@@ -52,6 +52,8 @@ Use `capture --cdp ENDPOINT` to attach to an existing Chromium/Electron host. If
 
 ## Action scripts
 
+Voice-driven web apps can receive prerecorded audio through an isolated virtual microphone while their real STT runs. Open Shadow DOM selectors (`host >>> target`) and held-pointer drags support embedded widgets, region selection, and sliders. See the [voice and interaction contract](docs/agent-authoring.md#voice-apps-embedded-widgets-and-dragging); input audio and the exported soundtrack remain separate.
+
 Scripts are JSON arrays. Each action resolves its target against the current page, checks visibility/hit-testing, and records dispatch timing. An action can wait for an expected result before the next action begins.
 
 ```json
@@ -66,7 +68,7 @@ Scripts are JSON arrays. Each action resolves its target against the current pag
 ]
 ```
 
-Supported actions: `move`, `click`, `type`, `key`, `scroll`, `waitFor`, `verify`, and `wait` (`ms`). `click` is the default type. Pacing controls are `moveMs`, `settleMs`, and `dwellMs`. `timeoutMs` controls target/condition waits. `waitFor` and `verify` accept `state: "visible" | "hidden"` and optional text. Typing animates text at the focused field; `typing.replace: true` clears it and `typing.mode: "instant"` inserts the full string. Explicit `key` actions support deletion and shortcuts in Chromium. Scroll x/y are pixel deltas. Explicit `point: {x,y}` is available for known coordinates.
+Supported actions: `move`, `click`, `type`, `key`, `scroll`, `waitFor`, `verify`, `wait` (`ms`), `selectText`, `drag`, and `audioInput`. `click` is the default type. Pacing controls are `moveMs`, `settleMs`, and `dwellMs`. `timeoutMs` controls target/condition waits. `waitFor` and `verify` accept `state: "visible" | "hidden"` and optional text. Typing animates text at the focused field; `typing.replace: true` clears it and `typing.mode: "instant"` inserts the full string. Explicit `key` actions support deletion and shortcuts in Chromium. Scroll x/y are pixel deltas. Explicit `point: {x,y}` is available for known coordinates.
 
 `runActions()` also accepts an async iterable: a future live agent can submit actions through the same executor. No LLM planner or provider integration ships here. `startChromiumRecording()` records independently of the producer; integrations feed observed samples and action events to its `emit` / `onAction` hooks.
 

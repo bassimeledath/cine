@@ -1,5 +1,6 @@
 import { sleep } from '../runtime/process.mjs'
 import { ease } from '../core/events.mjs'
+import { withTarget } from './targets.mjs'
 
 /** Emit cumulative pixel differences so rounding cannot change the total distance. */
 export async function scrollGesture(delta, dispatch, { durationMs = 900, onStep = () => {} } = {}) {
@@ -27,24 +28,26 @@ export async function scrollGesture(delta, dispatch, { durationMs = 900, onStep 
 
 /** The browser handles nested scrollers; await their observed motion before aiming. */
 export async function revealTarget(page, selector, timeoutMs = 5000) {
-  await page.waitForSelector(selector, { visible: true, timeout: timeoutMs })
-  await page.evaluate(async (selector, timeoutMs) => {
-    const el = document.querySelector(selector)
+  const handle = await page.waitForSelector(selector, { visible: true, timeout: timeoutMs })
+  await handle.dispose()
+  const result = await withTarget(page, selector, async (el, timeoutMs) => {
     el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' })
     const started = performance.now()
     let last, stableSince = started
     await new Promise((resolve, reject) => {
       const frame = (now) => {
-        if (!el.isConnected) return reject(new Error('Scroll target detached: ' + selector))
+        if (!el.isConnected) return reject(new Error('Scroll target detached'))
         const r = el.getBoundingClientRect()
         const position = [r.x, r.y, r.width, r.height]
         if (!last || position.some((v, i) => Math.abs(v - last[i]) > 0.1)) stableSince = now
         last = position
         if (now - started >= 180 && now - stableSince >= 120) return resolve()
-        if (now - started > timeoutMs) return reject(new Error('Scroll did not settle: ' + selector))
+        if (now - started > timeoutMs) return reject(new Error('Scroll did not settle'))
         requestAnimationFrame(frame)
       }
       requestAnimationFrame(frame)
     })
-  }, selector, timeoutMs)
+    return true
+  }, timeoutMs)
+  if (!result) throw new Error(`Scroll target detached: ${selector}`)
 }

@@ -1,5 +1,6 @@
 import { typeText } from './typing.mjs'
 import { revealTarget } from './scroll.mjs'
+import { withTarget, targetIsUsable } from './targets.mjs'
 /** DOM resolution is done at execution time, never frozen for the whole script. */
 export async function pointOf(
   page,
@@ -7,10 +8,8 @@ export async function pointOf(
   { textBounds = false, scroll = false } = {},
 ) {
   if (scroll) await revealTarget(page, selector)
-  return page.evaluate(
-    (sel, useText) => {
-      const el = document.querySelector(sel)
-      if (!el) return null
+  return withTarget(page, selector,
+    (el, useText) => {
       let r = el.getBoundingClientRect()
       if (
         useText &&
@@ -31,7 +30,6 @@ export async function pointOf(
         h: r.height,
       }
     },
-    selector,
     textBounds,
   )
 }
@@ -70,13 +68,13 @@ export async function pressKeyChord(keyboard, key) {
   }
 }
 
-export function chromiumDriver(page, client) {
+export function chromiumDriver(page, client, { microphone } = {}) {
   let buttons = 0
   return {
+    audioInput: microphone ? (file) => microphone.play(file) : undefined,
     async resolveSelection(selector, text, timeout = 5000) {
       await revealTarget(page, selector, timeout)
-      return page.evaluate((sel, text) => {
-        const el = document.querySelector(sel)
+      const selection = await withTarget(page, selector, (el, text) => {
         const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
         const nodes = []
         let node, content = ''
@@ -85,7 +83,7 @@ export function chromiumDriver(page, client) {
           content += node.textContent
         }
         const index = content.indexOf(text)
-        if (index < 0) throw new Error('Selection text not found in ' + sel)
+        if (index < 0) throw new Error('Selection text not found in target')
         const rectAt = (offset) => {
           const item = nodes.find(
             ({ node, start }) => offset >= start && offset < start + node.length,
@@ -99,13 +97,12 @@ export function chromiumDriver(page, client) {
           last = rectAt(index + text.length - 1)
         const start = { x: first.left + 0.1, y: first.top + first.height / 2 }
         const end = { x: last.right - 0.1, y: last.top + last.height / 2 }
-        for (const p of [start, end]) {
-          const hit = document.elementFromPoint(p.x, p.y)
-          if (!hit || !(hit === el || el.contains(hit)))
-            throw new Error('Selection endpoints must be visible and unobstructed')
-        }
         return { start, end }
-      }, selector, text)
+      }, text)
+      for (const point of [selection.start, selection.end])
+        if (!await withTarget(page, selector, targetIsUsable, point))
+          throw new Error('Selection endpoints must be visible and unobstructed')
+      return selection
     },
     async verifySelection(text) {
       const selected = await page.evaluate(() => getSelection().toString())
@@ -120,15 +117,7 @@ export function chromiumDriver(page, client) {
       await revealTarget(page, selector, timeout)
       const point = await pointOf(page, selector)
       if (!point) throw new Error(`Target is not visible: ${selector}`)
-      const usable = await page.evaluate(
-        (sel, p) => {
-          const el = document.querySelector(sel),
-            hit = document.elementFromPoint(p.x, p.y)
-          return el && !el.disabled && (el === hit || el.contains(hit))
-        },
-        selector,
-        point,
-      )
+      const usable = await withTarget(page, selector, targetIsUsable, point)
       if (!usable) throw new Error(`Target is covered or disabled: ${selector}`)
       return point
     },
@@ -175,7 +164,8 @@ export function chromiumDriver(page, client) {
                 : page.keyboard.type(text),
           clear: async () => {
             await page.evaluate(() => {
-              const el = document.activeElement
+              let el = document.activeElement
+              while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement
               if (el?.select) el.select()
               else if (el?.isContentEditable) {
                 const range = document.createRange()
@@ -205,24 +195,19 @@ export function chromiumDriver(page, client) {
         throw new Error('waitFor timeoutMs must be positive')
       if (!['visible', 'hidden'].includes(state))
         throw new Error('waitFor state must be visible or hidden')
-      await page.waitForFunction(
-        (sel, expected, state) => {
-          const el = document.querySelector(sel)
-          const visible =
-            el &&
-            el.getBoundingClientRect().width > 0 &&
-            el.getBoundingClientRect().height > 0 &&
+      const deadline = Date.now() + timeoutMs
+      while (true) {
+        const matched = await withTarget(page, selector, (el, expected, state) => {
+          const rect = el.getBoundingClientRect()
+          const visible = rect.width > 0 && rect.height > 0 &&
             getComputedStyle(el).visibility !== 'hidden'
-          return state === 'hidden'
-            ? !visible
-            : visible &&
-                (expected === undefined || el.textContent.includes(expected))
-        },
-        { timeout: timeoutMs },
-        selector,
-        text,
-        state,
-      )
+          return state === 'hidden' ? !visible : visible &&
+            (expected === undefined || String(el.matches('input, textarea, select') ? el.value : el.textContent).includes(expected))
+        }, text, state)
+        if (matched || (matched === null && state === 'hidden')) return
+        if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${selector} (${state}${text === undefined ? '' : ': ' + text})`)
+        await new Promise(resolve => setTimeout(resolve, 50))
+      }
     },
   }
 }

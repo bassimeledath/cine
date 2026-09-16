@@ -126,3 +126,17 @@ test('selection releases the mouse when dragging fails and does not claim verifi
   assert.equal(released,true)
   assert.equal(verified,false)
 })
+
+test('generic drag releases after transport failure and validates endpoints before pressing', async () => {
+  let released = false, moves = 0, pressed = false
+  const driver = {
+    move: async () => {if (++moves > 1) throw new Error('transport lost')},
+    down: async () => {pressed = true}, up: async () => {released = true},
+  }
+  await assert.rejects(runActions([{type:'drag',from:{point:{x:1,y:2}},to:{point:{x:9,y:8}},moveMs:0,settleMs:0,dragMs:0}],driver,{leadInMs:0,tailMs:0}),/transport lost/)
+  assert.ok(released)
+  pressed=false
+  await assert.rejects(runActions([{type:'drag',from:{point:{x:1,y:2}},to:{point:{x:NaN,y:8}}}],driver,{leadInMs:0,tailMs:0}),/endpoints/)
+  assert.equal(pressed,false)
+  await assert.rejects(runActions([{type:'audioInput',file:'speech.wav'}],driver,{leadInMs:0,tailMs:0}),/enabled virtual microphone/)
+})

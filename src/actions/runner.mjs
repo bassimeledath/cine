@@ -62,6 +62,8 @@ export async function runActions(
         'wait',
         'key',
         'selectText',
+        'drag',
+        'audioInput',
       ].includes(action.type)
     )
       throw new Error(`Unsupported action: ${action.type}`)
@@ -130,6 +132,32 @@ export async function runActions(
           })
         }
       }
+    } else if (action.type === 'drag') {
+      const endpoint = async (target) => {
+        if (target?.point && ['x', 'y'].every(k => Number.isFinite(target.point[k]))) return target.point
+        if (typeof target?.selector === 'string') return driver.resolve(target.selector, action.timeoutMs)
+        throw new Error('drag requires from/to endpoints with a selector or finite point')
+      }
+      // Resolve both before pressing; a malformed destination must not leave a button held.
+      const from = await endpoint(action.from), to = await endpoint(action.to)
+      await move(from, action.moveMs ?? 650)
+      await sleep(action.settleMs ?? 180)
+      milestones.dispatched = Date.now()
+      left = 1
+      try {
+        await driver.down(cursor)
+        sample()
+        await move(to, action.dragMs ?? 1100)
+      } finally {
+        try { await driver.up(cursor) }
+        finally { left = 0; sample() }
+      }
+    } else if (action.type === 'audioInput') {
+      if (typeof action.file !== 'string' || !action.file || !driver.audioInput)
+        throw new Error('audioInput requires a local file and an enabled virtual microphone')
+      const playback = await driver.audioInput(action.file)
+      milestones.dispatched = playback.startMs
+      action.durationMs = playback.durationMs
     } else if (action.type === 'selectText') {
       if (
         typeof action.selector !== 'string' || !action.selector ||

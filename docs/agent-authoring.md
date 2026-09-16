@@ -124,3 +124,28 @@ For a narration hold at a captured event, inspect the event's source timestamp, 
 Preview can instead take `--from-ms` and `--to-ms`. Bounds round outward to the output frame grid, and the artifact manifest records actual bounds. Camera state, scene-local animation, and audio ducking are evaluated against the full timeline before taking the preview. The preview includes a WAV when audio exists. Final exports produce MP4, cover PNG/metadata, caption sidecars when present, and `.artifacts.json`. Audio-only changes reuse a completed silent video from `.cine-cache` when the picture inputs match; changes to captions, footage timing, visuals, or scene code invalidate picture reuse. Inspection exports deliberately render frames again.
 
 `--json` keeps stdout machine-readable; progress goes to stderr. Validation failures return `{ok:false,error:{code,path,message,suggestion}}` when a precise field error is available, or a general error for IO failures. Inspect/validate are read-only. Use `migrate --project old.json --out migrated.json` beside the original to preserve relative paths; migration refuses an existing destination and never modifies its input.
+
+## Voice apps, embedded widgets, and dragging
+
+Browser selectors accept Puppeteer's open Shadow DOM combinator, e.g. `[data-widget] >>> [aria-label="Annotation"]`. Use the same selector for clicking, typing, waiting, text selection, and captured camera anchors. Closed shadow roots remain inaccessible. `waitFor`/`verify` matches the `value` of inputs and textareas, or other elements' text content. Outcome checks should follow actions rather than relying on fixed delays.
+
+```json
+[
+  {"id":"region","type":"drag","from":{"point":{"x":240,"y":180}},"to":{"point":{"x":940,"y":350}},"dragMs":1100},
+  {"id":"listening","type":"waitFor","selector":"voice-widget >>> .status","text":"Listening","timeoutMs":60000},
+  {"id":"utterance","type":"audioInput","file":"audio/feedback.wav"},
+  {"id":"transcribed","type":"verify","selector":"voice-widget >>> textarea","text":"Make the button clearer","timeoutMs":30000}
+]
+```
+
+Drag endpoints accept `{selector}` or `{point:{x,y}}` in capture-viewport CSS pixels. A drag sends actual held-pointer events and always attempts release, including on failure. Both selector endpoints must fit in the same settled viewport. This primitive supports region selection, sliders, and pointer-driven canvases; HTML native drag-and-drop/DataTransfer is a separate browser mechanism.
+
+An `audioInput` action automatically enables a virtual microphone in a **fresh headless Chromium capture**. File paths in CLI scripts resolve relative to the script; JavaScript callers resolve their own paths. An async action producer must pass `microphone: true` to `captureChromium`. WAV is recommended; other formats depend on Chromium's decoder. Use HTTPS or localhost. The app must request audio with `getUserMedia`; video requests and attaching microphone injection to an existing browser are rejected. No physical microphone or speakers are involved. Wait for the app's listening state before playback, then verify its real result. The app's STT/provider runs normally; Cine does not substitute transcripts or bypass credentials/network requirements. Each action waits for the clip to end, saves its measured decoded `durationMs`, and records the browser-clock playback onset as `dispatched`. Keep clips shorter than the 120-second capture protocol timeout.
+
+Input is separate from the exported soundtrack. To let the audience hear that same utterance, reference the local clip explicitly:
+
+```json
+{"id":"audible-feedback","file":"audio/feedback.wav","at":{"action":"utterance","event":"dispatched"},"role":"narration","captions":{"file":"audio/feedback.vtt"}}
+```
+
+This also allows silent app input, separate voice-over, or different audience audio. Microphone streams can be reacquired between utterances; cleanup stops their tracks and restores the page's media API. The low-level `installVirtualMicrophone(page)` API is intended only for disposable pages owned by a recording harness. It is not a system virtual audio device, does not intercept native/Electron OS microphone APIs, and currently controls the top-level document's audio consumer.

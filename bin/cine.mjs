@@ -113,7 +113,8 @@ const script = () => {
   const actions = readJson(arg('--script'))
   if (!Array.isArray(actions))
     throw new Error('Action script must be a JSON array')
-  return actions
+  return actions.map(action => action.type === 'audioInput' && typeof action.file === 'string'
+    ? { ...action, file: resolve(dirname(resolve(arg('--script'))), action.file) } : action)
 }
 const help = `cine — cinematic demos (macOS supported initially)
   demo [--electron|--native] [--url URL --script actions.json] [--work DIR] [--out MP4]
